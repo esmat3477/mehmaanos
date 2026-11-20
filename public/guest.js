@@ -16,23 +16,23 @@
       st: { PendingApproval: 'Waiting for staff to confirm', Accepted: 'Confirmed, sent to kitchen', InPreparation: 'Being prepared', Ready: 'Ready, coming to your table', Served: 'Served', Closed: 'Closed', Rejected: 'Not accepted, please ask staff', Canceled: 'Canceled, please ask staff' },
       al: { gluten: 'Gluten', crustaceans: 'Crustaceans', egg: 'Egg', fish: 'Fish', peanuts: 'Peanuts', soy: 'Soy', milk: 'Milk', nuts: 'Tree nuts', celery: 'Celery', mustard: 'Mustard', sesame: 'Sesame', sulphites: 'Sulphites', lupin: 'Lupin', molluscs: 'Molluscs' }, spicy: 'Spicy', offline: 'Connection problem. Your order was not sent yet. Try again.' },
     fa: { add: 'افزودن', cart: 'سفارش شما', view: 'دیدن سفارش', send: 'فرستادن سفارش به رستورانت', sending: 'در حال فرستادن…', total: 'مجموع',
-      note: 'یادداشت برای آشپزخانه (اختیاری)', spice: 'میزان تندی', mild: 'کم', medium: 'متوسط', hot: 'تند', close: 'بستن',
-      orders: 'سفارش‌های شما', waiter: 'صدا کردن گارسون', bill: 'درخواست صورت‌حساب', water: 'آب لطفاً', called: 'درخواست فرستاده شد. یکی از کارمندان می‌آید.',
-      claimed: 'یکی از کارمندان در راه است.', paused: 'سفارش آنلاین فعلاً متوقف است. لطفاً از گارسون بپرسید.', items: 'قلم',
+      note: 'یادداشت برای آشپزخانه (اختیاری)', spice: 'میزان تندی', mild: 'کم‌تند', medium: 'متوسط', hot: 'تند', close: 'بستن',
+      orders: 'سفارش‌های شما', waiter: 'صدا کردن پیشخدمت', bill: 'درخواست حساب', water: 'آب لطفاً', called: 'درخواست فرستاده شد. یکی از کارمندان می‌آید.',
+      claimed: 'یکی از کارمندان در راه است.', paused: 'سفارش آنلاین فعلاً متوقف است. لطفاً از پیشخدمت بپرسید.', items: 'قلم',
       allergens: 'دارای', unreviewed: 'معلومات حساسیت‌زا هنوز از سوی رستورانت تأیید نشده است. اگر حساسیت دارید، از کارمندان بپرسید.',
-      confirm: 'لطفاً سفارش خود را بررسی کنید. قیمت‌ها هنگام فرستادن از سوی رستورانت تأیید می‌شوند.', invalid: 'کد این میز معتبر نیست. لطفاً از گارسون بپرسید.',
+      confirm: 'لطفاً سفارش خود را بررسی کنید. قیمت‌ها هنگام فرستادن از سوی رستورانت تأیید می‌شوند.', invalid: 'کد این میز معتبر نیست. لطفاً از پیشخدمت بپرسید.',
       unavailable: 'موجود نیست', payNote: 'پرداخت مانند همیشه نزد کارمندان انجام می‌شود.', tableLbl: 'میز',
       st: { PendingApproval: 'در انتظار تأیید کارمندان', Accepted: 'تأیید شد، به آشپزخانه رفت', InPreparation: 'در حال آماده‌سازی', Ready: 'آماده است، به میز شما می‌آید', Served: 'سرو شد', Closed: 'بسته شد', Rejected: 'پذیرفته نشد، لطفاً از کارمندان بپرسید', Canceled: 'لغو شد، لطفاً از کارمندان بپرسید' },
-      al: { gluten: 'گلوتن', crustaceans: 'خرچنگ و میگو', egg: 'تخم مرغ', fish: 'ماهی', peanuts: 'بادام زمینی', soy: 'سویا', milk: 'شیر', nuts: 'مغزها', celery: 'کرفس', mustard: 'خردل', sesame: 'کنجد', sulphites: 'سولفیت', lupin: 'لوپین', molluscs: 'صدف' }, spicy: 'تند', offline: 'مشکل اتصال. سفارش هنوز فرستاده نشده. دوباره کوشش کنید.' },
+      al: { gluten: 'گلوتن', crustaceans: 'خرچنگ و میگو', egg: 'تخم مرغ', fish: 'ماهی', peanuts: 'مومپلی', soy: 'سویا', milk: 'شیر', nuts: 'مغزها', celery: 'کرفس', mustard: 'خردل', sesame: 'کنجد', sulphites: 'سولفیت', lupin: 'لوپین', molluscs: 'صدف' }, spicy: 'تند', offline: 'مشکل اتصال. سفارش هنوز فرستاده نشده. دوباره کوشش کنید.' },
     ps: { add: 'زیاتول', cart: 'ستاسو فرمایش', view: 'فرمایش وګورئ', send: 'فرمایش رستورانت ته ولېږئ', sending: 'لېږل کېږي…', total: 'ټول',
-      note: 'د پخلنځي لپاره یادښت (اختیاري)', spice: 'د تریخوالي کچه', mild: 'کم', medium: 'منځنی', hot: 'تریخ', close: 'بندول',
-      orders: 'ستاسو فرمایشونه', waiter: 'ګارسون راوبلئ', bill: 'بل وغواړئ', water: 'اوبه مهرباني', called: 'غوښتنه ولېږل شوه. یو کارکوونکی به راشي.',
+      note: 'د پخلنځي لپاره یادښت (اختیاري)', spice: 'د تریخوالي کچه', mild: 'لږ تریخ', medium: 'منځنی', hot: 'تریخ', close: 'بندول',
+      orders: 'ستاسو فرمایشونه', waiter: 'ګارسون راوبلئ', bill: 'حساب وغواړئ', water: 'اوبه، مهرباني', called: 'غوښتنه ولېږل شوه. یو کارکوونکی به راشي.',
       claimed: 'یو کارکوونکی په لاره کې دی.', paused: 'آنلاین فرمایش اوس ودرول شوی. مهرباني وکړئ له ګارسون پوښتنه وکړئ.', items: 'توکي',
       allergens: 'لري', unreviewed: 'د حساسیت معلومات لا د رستورانت لخوا نه دي تایید شوي. که حساسیت لرئ، له کارکوونکو وپوښتئ.',
       confirm: 'مهرباني وکړئ خپل فرمایش وګورئ. بیې د لېږلو پر مهال د رستورانت لخوا تاییدېږي.', invalid: 'د دې مېز کوډ سم نه دی. له ګارسون پوښتنه وکړئ.',
       unavailable: 'نشته', payNote: 'تادیه د تل په څېر له کارکوونکو سره کېږي.', tableLbl: 'مېز',
       st: { PendingApproval: 'د کارکوونکو تایید ته انتظار', Accepted: 'تایید شو، پخلنځي ته لاړ', InPreparation: 'چمتو کېږي', Ready: 'چمتو دی، ستاسو مېز ته راځي', Served: 'وړاندې شو', Closed: 'بند شو', Rejected: 'ونه منل شو، له کارکوونکو وپوښتئ', Canceled: 'لغوه شو، له کارکوونکو وپوښتئ' },
-      al: { gluten: 'ګلوټن', crustaceans: 'چنګاښ او مېګو', egg: 'هګۍ', fish: 'کب', peanuts: 'مومپلي', soy: 'سویا', milk: 'شیدې', nuts: 'مغزیات', celery: 'کرفس', mustard: 'اوربشه', sesame: 'کونجد', sulphites: 'سلفایټ', lupin: 'لوپین', molluscs: 'صدف' }, spicy: 'تریخ', offline: 'د اړیکې ستونزه. فرمایش لا نه دی لېږل شوی. بیا هڅه وکړئ.' }
+      al: { gluten: 'ګلوټن', crustaceans: 'چنګاښ او مېګو', egg: 'هګۍ', fish: 'کب', peanuts: 'مومپلي', soy: 'سویا', milk: 'شیدې', nuts: 'مغزیات', celery: 'کرفس', mustard: 'شړشم', sesame: 'کونجد', sulphites: 'سلفایټ', lupin: 'لوپین', molluscs: 'صدف' }, spicy: 'تریخ', offline: 'د اړیکې ستونزه. فرمایش لا نه دی لېږل شوی. بیا هڅه وکړئ.' }
   };
 
   const store = {

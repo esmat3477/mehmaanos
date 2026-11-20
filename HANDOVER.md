@@ -30,12 +30,20 @@ Any PostgreSQL 13+ (e.g. AWS RDS, smallest instance). The app creates its own ta
 7. Admin → **Settings**: set the restaurant name. Keep "Staff must approve each QR order" ON for the pilot.
 8. Test one order end to end: guest phone → waiter accepts → kitchen → served → closed → Daily report.
 
-## 4. Pilot release gates still open (from the QA report)
-- [ ] Real menu, prices and allergen data from the restaurant
-- [ ] Native-speaker review of all Dari and Pashto text
-- [ ] Device test: cheap Android + iPhone Safari (guests), kitchen tablet under kitchen conditions
-- [ ] Outage drill: kill Wi-Fi/internet mid-service; confirm paper fallback and that no order is lost or duplicated
-- [ ] Staff training + supervised shadow service before guests use it
+## 4. Pilot release gates
+Done (20 Nov 2026):
+- [x] Phone tests: iPhone-size and low-end Android 360px on slow 3G, English/Dari/Pashto, no sideways scrolling, tap sizes (`tools/e2e_phone_outage.py`, 20/20 pass)
+- [x] Outage tests: phone offline when sending, reply lost after the server saved the order, server restart mid-service. No lost and no duplicate orders; kitchen reconnects by itself
+- [x] Translation pass: Afghan vocabulary, 12 corrections; full sheet in `TRANSLATIONS-REVIEW.md`
+- [x] Staff guide per role + printable paper order slips for outages: `/guide`
+- [x] PostgreSQL persistence verified across restarts
+
+Still open (need people, not code):
+- [ ] Real menu, prices and allergen data from the restaurant (enter in Admin → Menu)
+- [ ] Native speaker ticks every row in `TRANSLATIONS-REVIEW.md`
+- [ ] One check on a real iPhone (Safari engine could not be installed in the build environment)
+- [ ] Supervised trial service with staff, using `/guide`
+- [ ] Aria AWS fix (section 1), database, domain
 - [ ] Legal: restaurant country/entity, privacy notice, trademark check for "MehmaanOS"
 
 ## 5. Code map
@@ -49,3 +57,5 @@ Any PostgreSQL 13+ (e.g. AWS RDS, smallest instance). The app creates its own ta
 | `lib/seed.js` | Demo menu, schema migrations, EU 14 allergen list |
 | `public/` | Guest, waiter, kitchen, admin screens (vanilla JS, no build step) |
 | `test/` | Unit, API end-to-end and PostgreSQL tests (CI in `.github/workflows`) |
+| `tools/e2e_phone_outage.py` | Browser tests: phones, slow network, outages, restart |
+| `public/guide.html` | Staff guide and paper order slips (`/guide`) |

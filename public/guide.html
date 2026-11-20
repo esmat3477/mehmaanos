@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Staff guide · MehmaanOS</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon.svg">
+<style>
+  .guide h2{margin-top:1.4rem} .guide li{margin:.3rem 0} .fa{direction:rtl;text-align:right;color:var(--muted);font-size:.95rem}
+  .slip{border:2px dashed #999;border-radius:10px;padding:14px;margin:10px 0;break-inside:avoid;background:#fff}
+  .slip .line{border-bottom:1px solid #bbb;height:30px} .slip .grid4{display:grid;grid-template-columns:2fr 1fr 2fr;gap:10px}
+  .pagebreak{break-before:page}
+</style>
+</head>
+<body>
+<main class="wrap narrow guide">
+  <div class="row between noprint"><div class="brand">Mehmaan<span>OS</span> staff guide</div><button class="primary" id="print">Print</button></div>
+
+  <h2>Before service (manager, 5 min)</h2>
+  <ol>
+    <li>Open <b>/admin</b>. Mark sold-out dishes (untick "available").</li>
+    <li>Check the kitchen tablet shows <b>● live</b> in green.</li>
+    <li>Check every table has its QR card. A missing or damaged card → Admin → Tables &amp; QR → print.</li>
+    <li>Keep 20 paper order slips (last page) at the counter.</li>
+  </ol>
+  <p class="fa">پیش از کار: غذاهای تمام‌شده را خاموش کنید، «live» سبز را روی تبلت آشپزخانه ببینید، کارت QR هر میز را بررسی کنید.</p>
+
+  <h2>Waiter (/staff)</h2>
+  <ol>
+    <li><b>New order</b> appears under "Needs approval". Check the table is really occupied and the order makes sense → <b>Accept → kitchen</b>. If not → <b>Reject</b> and write a short reason.</li>
+    <li><b>Guest request</b> (waiter, bill, water): tap <b>I'm on it</b>, go to the table, then <b>Done</b>. Red = the guest has waited over 2 minutes.</li>
+    <li>When food is <b>Ready</b>, take it to the table → <b>Mark served</b>.</li>
+    <li>When the guest has paid at the counter → <b>Close (paid)</b>.</li>
+    <li>Guest wants to change an order already in the kitchen: tell the kitchen in person, <b>Cancel</b> with the reason, ask the guest to send a new order (or take it on paper).</li>
+  </ol>
+  <p class="fa">پیشخدمت: سفارش نو را تأیید یا رد کنید، به درخواست مهمان «I'm on it» بزنید، غذای آماده را ببرید و «served» بزنید، بعد از پرداخت «Close» بزنید.</p>
+
+  <h2>Kitchen (/kitchen)</h2>
+  <ol>
+    <li>New tickets appear in <b>New</b> with a sound. Tap <b>Start cooking</b> when you begin.</li>
+    <li>Tap <b>Mark ready</b> when the plate is ready for the waiter.</li>
+    <li>Read notes (📝) and spice level on every line. A red border means the ticket is over 20 minutes old.</li>
+    <li>Never cook from a guest's phone screen. Only cook what is on this display or on a paper slip.</li>
+  </ol>
+  <p class="fa">آشپزخانه: «Start cooking» را بزنید، وقتی آماده شد «Mark ready». یادداشت و میزان تندی را بخوانید.</p>
+
+  <h2>If something goes wrong</h2>
+  <table class="list">
+    <tr><th>Problem</th><th>What to do</th></tr>
+    <tr><td>Kitchen screen says <b>reconnecting</b> for more than 1 minute</td><td>Manager: Admin → Settings → <b>Pause QR ordering</b>. Switch to paper slips. Tell waiters.</td></tr>
+    <tr><td>No internet at all</td><td>Paper slips for everyone. Guests can still read the menu if it already loaded; tell them to order with the waiter.</td></tr>
+    <tr><td>Guest says "my order didn't go through"</td><td>Check /staff for their table before re-ordering. The system never sends the same order twice, but the guest may have sent two different orders.</td></tr>
+    <tr><td>Strange orders from a table nobody sits at</td><td>Reject them. Admin → Tables &amp; QR → <b>New QR</b> for that table and put the new card out.</td></tr>
+    <tr><td>Wrong price on the menu</td><td>Admin → Menu → Edit. Orders already placed keep the old price; correct at the till.</td></tr>
+    <tr><td>Guest asks about allergies</td><td>Always ask the kitchen. The menu list helps but the cook confirms.</td></tr>
+  </table>
+  <p class="fa">اگر اینترنت قطع شد: در Admin سفارش QR را متوقف کنید و از برگه‌های کاغذی استفاده کنید.</p>
+
+  <h2>End of day (manager)</h2>
+  <ol>
+    <li>/staff: every order should be <b>Closed</b>, Rejected or Canceled. Close what is left.</li>
+    <li>Admin → <b>Daily report</b>: compare "Closed (paid)" with the till. Print or save it.</li>
+    <li>Collect used paper slips and add them to the day's paperwork.</li>
+  </ol>
+
+  <div class="pagebreak"></div>
+  <h2>Paper order slips (for outages)</h2>
+  <p class="small muted noprint">Print this page and cut along the dashed lines.</p>
+  <div id="slips"></div>
+</main>
+<script src="/static/guide.js"></script>
+</body>
+</html>

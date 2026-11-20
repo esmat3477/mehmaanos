@@ -12,6 +12,7 @@ QR table ordering for restaurants: guest menu in English, Dari and Pashto, kitch
 | `/t/<token>` | Guest | Menu (EN/دری/پښتو), cart, send order, live status, call waiter / bill / water |
 | `/staff` | Waiter | Table map, approve/reject orders, guest requests (flagged after 2 min), mark served/closed |
 | `/kitchen` | Kitchen | New / Cooking / Ready, timers, late tickets after 20 min, sound on new order |
+| `/guide` | Everyone | Printable staff guide per role + paper order slips for outages |
 | `/admin` | Manager | Menu editor, sold-out, allergen sign-off, QR codes, staff accounts, daily report, settings, backups, audit log |
 
 ## Safeguards
@@ -40,6 +41,7 @@ QR table ordering for restaurants: guest menu in English, Dari and Pashto, kitch
 npm install
 npm start                 # http://localhost:3000, then sign in with 1111 and create your Manager account
 npm test                  # 15 tests; set TEST_DATABASE_URL to include the PostgreSQL test
+python tools/e2e_phone_outage.py   # 20 browser tests (needs: pip install playwright)
 ```
 Node 18+. One runtime dependency (`pg`). Health check: `GET /healthz`.
 

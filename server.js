@@ -168,7 +168,7 @@ async function handle(req, res) {
   if (p === '/healthz') return send(res, store.lastError ? 503 : 200, { ok: !store.lastError, storage: store.driver.name, lastSavedAt: store.lastSavedAt, error: store.lastError || undefined });
 
   // ----- pages -----
-  const pages = { '/': 'index.html', '/kitchen': 'kitchen.html', '/staff': 'staff.html', '/admin': 'admin.html', '/login': 'login.html' };
+  const pages = { '/': 'index.html', '/kitchen': 'kitchen.html', '/staff': 'staff.html', '/admin': 'admin.html', '/login': 'login.html', '/guide': 'guide.html' };
   if (M === 'GET' && pages[p]) return serveFile(res, pages[p]);
   if (M === 'GET' && p.startsWith('/t/')) return serveFile(res, 'guest.html');
   if (M === 'GET' && p.startsWith('/static/')) return serveFile(res, p.slice(8));
