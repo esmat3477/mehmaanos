@@ -1,0 +1,13 @@
+{
+  "name": "mehmaanos",
+  "version": "0.1.0",
+  "description": "MehmaanOS restaurant QR ordering pilot (guest menu, kitchen display, floor dashboard, admin)",
+  "main": "server.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/orders.test.js test/api.test.js"
+  }
+}
