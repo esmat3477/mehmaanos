@@ -6,13 +6,15 @@ const os = require('os'); const fs = require('fs'); const path = require('path')
 const { spawn } = require('child_process');
 
 let proc, base;
-test.before(async () => {
+async function boot(env) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-'));
   const port = 40000 + Math.floor(Math.random() * 10000);
-  base = `http://127.0.0.1:${port}`;
-  proc = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT: port, DATA_DIR: dir, ADMIN_PIN: '9001', STAFF_PIN: '9002', KITCHEN_PIN: '9003' }, stdio: 'ignore' });
-  for (let i = 0; i < 50; i++) { try { await fetch(base + '/healthz'); return; } catch { await new Promise(r => setTimeout(r, 100)); } }
-});
+  const b = `http://127.0.0.1:${port}`;
+  const p = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { PATH: process.env.PATH, PORT: port, DATA_DIR: dir, ...env }, stdio: 'ignore' });
+  for (let i = 0; i < 80; i++) { try { await fetch(b + '/healthz'); return { p, b }; } catch { await new Promise(r => setTimeout(r, 100)); } }
+  throw new Error('server did not start');
+}
+test.before(async () => { ({ p: proc, b: base } = await boot({ ADMIN_PIN: '9001', STAFF_PIN: '9002', KITCHEN_PIN: '9003' })); });
 test.after(() => proc.kill());
 
 const j = async (method, url, body, cookie) => {
@@ -61,4 +63,68 @@ test('full flow: QR order -> approval -> kitchen -> served, with idempotency and
 
   const csv = await j('GET', '/api/admin/export.csv', null, admin);
   assert.match(csv.body, /Kabuli Pulao/);
+});
+
+test('menu editor: add, edit, delete; allergen change voids sign-off; snapshots survive', async () => {
+  const admin = (await j('POST', '/api/login', { pin: '9001' })).cookie;
+  await j('POST', '/api/admin/allergen-review', { by: 'Manager Test' }, admin);
+  assert.ok((await j('GET', '/api/admin/menu', null, admin)).body.allergenReview);
+  const add = await j('POST', '/api/admin/items', { cat: 'mains', price: 410, name: { en: 'Qabili Special', fa: 'قابلی ویژه' }, allergens: ['nuts', 'bogus'] }, admin);
+  assert.strictEqual(add.status, 200);
+  assert.deepStrictEqual(add.body.item.allergens, ['nuts'], 'unknown allergen keys are dropped');
+  assert.strictEqual((await j('GET', '/api/admin/menu', null, admin)).body.allergenReview, null, 'new allergen data needs fresh sign-off');
+  assert.strictEqual((await j('POST', '/api/admin/items', { cat: 'nope', price: 1, name: { en: 'x' } }, admin)).status, 400);
+  assert.strictEqual((await j('POST', '/api/admin/categories/mains/delete', {}, admin)).status, 409, 'non-empty category cannot be deleted');
+  const id = add.body.item.id;
+  const { body: { tables } } = await j('GET', '/api/admin/tables', null, admin);
+  const tok = tables[2].url.split('/t/')[1];
+  const o = await j('POST', `/api/guest/${tok}/orders`, { idemKey: 'menuedit0001', cart: [{ itemId: id, qty: 1 }] });
+  assert.strictEqual(o.body.order.total, 410);
+  await j('POST', `/api/admin/items/${id}/delete`, {}, admin);
+  const after = await j('GET', `/api/guest/${tok}/orders?ids=${o.body.order.id}`);
+  assert.strictEqual(after.body.orders[0].lines[0].name.en, 'Qabili Special');
+  // staff (non-admin) cannot edit menu
+  const staff = (await j('POST', '/api/login', { pin: '9002' })).cookie;
+  assert.strictEqual((await j('POST', '/api/admin/items', { cat: 'mains', price: 1, name: { en: 'x' } }, staff)).status, 401);
+});
+
+test('named staff accounts: login, audit by name, deactivation kills session, unique PINs', async () => {
+  const admin = (await j('POST', '/api/login', { pin: '9001' })).cookie;
+  assert.strictEqual((await j('POST', '/api/admin/users', { name: 'Farid', role: 'staff', pin: '12' }, admin)).status, 400);
+  const u = await j('POST', '/api/admin/users', { name: 'Farid', role: 'staff', pin: '482915' }, admin);
+  assert.strictEqual(u.status, 201);
+  assert.strictEqual((await j('POST', '/api/admin/users', { name: 'Dup', role: 'kitchen', pin: '482915' }, admin)).status, 409);
+  const list = await j('GET', '/api/admin/users', null, admin);
+  assert.ok(!JSON.stringify(list.body).includes('pinHash'), 'hashes never leave the server');
+  const farid = await j('POST', '/api/login', { pin: '482915' });
+  assert.strictEqual(farid.body.name, 'Farid');
+  assert.strictEqual((await j('GET', '/api/state', null, farid.cookie)).status, 200);
+  await j('POST', `/api/admin/users/${u.body.id}/deactivate`, {}, admin);
+  assert.strictEqual((await j('GET', '/api/state', null, farid.cookie)).status, 401, 'deactivated user is locked out at once');
+  const audit = await j('GET', '/api/admin/audit', null, admin);
+  assert.ok(audit.body.audit.some(a => a.actor === 'Farid' && a.action === 'login'));
+});
+
+test('report and health endpoints', async () => {
+  const admin = (await j('POST', '/api/login', { pin: '9001' })).cookie;
+  const r = await j('GET', `/api/admin/report?date=${new Date().toISOString().slice(0, 10)}&tz=0`, null, admin);
+  assert.strictEqual(r.status, 200);
+  assert.ok(r.body.orders.total >= 2);
+  const h = await j('GET', '/healthz');
+  assert.strictEqual(h.body.ok, true);
+  const b = await j('GET', '/api/admin/backup.json', null, admin);
+  assert.ok(!('secret' in (typeof b.body === 'string' ? JSON.parse(b.body) : b.body)), 'backup never contains the signing secret');
+});
+
+test('setup PINs work only until a real admin exists', async () => {
+  const { p, b } = await boot({});
+  try {
+    const jj = async (m, u, body, cookie) => { const r = await fetch(b + u, { method: m, headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, cookie: (r.headers.get('set-cookie') || '').split(';')[0] }; };
+    const setup = await jj('POST', '/api/login', { pin: '1111' });
+    assert.strictEqual(setup.status, 200);
+    assert.strictEqual((await jj('POST', '/api/admin/users', { name: 'Owner', role: 'admin', pin: '7391' }, setup.cookie)).status, 201);
+    assert.strictEqual((await jj('POST', '/api/login', { pin: '1111' })).status, 401, 'setup PIN disabled');
+    assert.strictEqual((await jj('GET', '/api/state', null, setup.cookie)).status, 401, 'old setup session revoked');
+    assert.strictEqual((await jj('POST', '/api/login', { pin: '7391' })).status, 200);
+  } finally { p.kill(); }
 });

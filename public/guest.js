@@ -14,7 +14,7 @@
       confirm: 'Please check your order. Prices are confirmed by the restaurant when you send.', invalid: 'This table code is not valid. Please ask a waiter.',
       unavailable: 'Not available', payNote: 'Payment is made with staff, as usual.', tableLbl: 'Table',
       st: { PendingApproval: 'Waiting for staff to confirm', Accepted: 'Confirmed, sent to kitchen', InPreparation: 'Being prepared', Ready: 'Ready, coming to your table', Served: 'Served', Closed: 'Closed', Rejected: 'Not accepted, please ask staff', Canceled: 'Canceled, please ask staff' },
-      al: { gluten: 'Gluten', milk: 'Milk', nuts: 'Nuts', sesame: 'Sesame', egg: 'Egg' }, spicy: 'Spicy', offline: 'Connection problem. Your order was not sent yet. Try again.' },
+      al: { gluten: 'Gluten', crustaceans: 'Crustaceans', egg: 'Egg', fish: 'Fish', peanuts: 'Peanuts', soy: 'Soy', milk: 'Milk', nuts: 'Tree nuts', celery: 'Celery', mustard: 'Mustard', sesame: 'Sesame', sulphites: 'Sulphites', lupin: 'Lupin', molluscs: 'Molluscs' }, spicy: 'Spicy', offline: 'Connection problem. Your order was not sent yet. Try again.' },
     fa: { add: 'افزودن', cart: 'سفارش شما', view: 'دیدن سفارش', send: 'فرستادن سفارش به رستورانت', sending: 'در حال فرستادن…', total: 'مجموع',
       note: 'یادداشت برای آشپزخانه (اختیاری)', spice: 'میزان تندی', mild: 'کم', medium: 'متوسط', hot: 'تند', close: 'بستن',
       orders: 'سفارش‌های شما', waiter: 'صدا کردن گارسون', bill: 'درخواست صورت‌حساب', water: 'آب لطفاً', called: 'درخواست فرستاده شد. یکی از کارمندان می‌آید.',
@@ -23,7 +23,7 @@
       confirm: 'لطفاً سفارش خود را بررسی کنید. قیمت‌ها هنگام فرستادن از سوی رستورانت تأیید می‌شوند.', invalid: 'کد این میز معتبر نیست. لطفاً از گارسون بپرسید.',
       unavailable: 'موجود نیست', payNote: 'پرداخت مانند همیشه نزد کارمندان انجام می‌شود.', tableLbl: 'میز',
       st: { PendingApproval: 'در انتظار تأیید کارمندان', Accepted: 'تأیید شد، به آشپزخانه رفت', InPreparation: 'در حال آماده‌سازی', Ready: 'آماده است، به میز شما می‌آید', Served: 'سرو شد', Closed: 'بسته شد', Rejected: 'پذیرفته نشد، لطفاً از کارمندان بپرسید', Canceled: 'لغو شد، لطفاً از کارمندان بپرسید' },
-      al: { gluten: 'گلوتن', milk: 'شیر', nuts: 'مغزها', sesame: 'کنجد', egg: 'تخم' }, spicy: 'تند', offline: 'مشکل اتصال. سفارش هنوز فرستاده نشده. دوباره کوشش کنید.' },
+      al: { gluten: 'گلوتن', crustaceans: 'خرچنگ و میگو', egg: 'تخم مرغ', fish: 'ماهی', peanuts: 'بادام زمینی', soy: 'سویا', milk: 'شیر', nuts: 'مغزها', celery: 'کرفس', mustard: 'خردل', sesame: 'کنجد', sulphites: 'سولفیت', lupin: 'لوپین', molluscs: 'صدف' }, spicy: 'تند', offline: 'مشکل اتصال. سفارش هنوز فرستاده نشده. دوباره کوشش کنید.' },
     ps: { add: 'زیاتول', cart: 'ستاسو فرمایش', view: 'فرمایش وګورئ', send: 'فرمایش رستورانت ته ولېږئ', sending: 'لېږل کېږي…', total: 'ټول',
       note: 'د پخلنځي لپاره یادښت (اختیاري)', spice: 'د تریخوالي کچه', mild: 'کم', medium: 'منځنی', hot: 'تریخ', close: 'بندول',
       orders: 'ستاسو فرمایشونه', waiter: 'ګارسون راوبلئ', bill: 'بل وغواړئ', water: 'اوبه مهرباني', called: 'غوښتنه ولېږل شوه. یو کارکوونکی به راشي.',
@@ -32,7 +32,7 @@
       confirm: 'مهرباني وکړئ خپل فرمایش وګورئ. بیې د لېږلو پر مهال د رستورانت لخوا تاییدېږي.', invalid: 'د دې مېز کوډ سم نه دی. له ګارسون پوښتنه وکړئ.',
       unavailable: 'نشته', payNote: 'تادیه د تل په څېر له کارکوونکو سره کېږي.', tableLbl: 'مېز',
       st: { PendingApproval: 'د کارکوونکو تایید ته انتظار', Accepted: 'تایید شو، پخلنځي ته لاړ', InPreparation: 'چمتو کېږي', Ready: 'چمتو دی، ستاسو مېز ته راځي', Served: 'وړاندې شو', Closed: 'بند شو', Rejected: 'ونه منل شو، له کارکوونکو وپوښتئ', Canceled: 'لغوه شو، له کارکوونکو وپوښتئ' },
-      al: { gluten: 'ګلوټن', milk: 'شیدې', nuts: 'مغزیات', sesame: 'کونجد', egg: 'هګۍ' }, spicy: 'تریخ', offline: 'د اړیکې ستونزه. فرمایش لا نه دی لېږل شوی. بیا هڅه وکړئ.' }
+      al: { gluten: 'ګلوټن', crustaceans: 'چنګاښ او مېګو', egg: 'هګۍ', fish: 'کب', peanuts: 'مومپلي', soy: 'سویا', milk: 'شیدې', nuts: 'مغزیات', celery: 'کرفس', mustard: 'اوربشه', sesame: 'کونجد', sulphites: 'سلفایټ', lupin: 'لوپین', molluscs: 'صدف' }, spicy: 'تریخ', offline: 'د اړیکې ستونزه. فرمایش لا نه دی لېږل شوی. بیا هڅه وکړئ.' }
   };
 
   const store = {

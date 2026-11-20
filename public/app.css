@@ -104,3 +104,4 @@ html:has(body.kds){background:#111}
 body.kds{min-height:100vh}
 .kds header.top button.ghost{color:#eee;border-color:#444}
 .kds header.top a{color:#F0A27A}
+.req.late{border-color:var(--bad);box-shadow:0 0 0 2px #F4B4AE}

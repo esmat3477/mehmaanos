@@ -54,7 +54,8 @@
       el('div', { class: 'grid cols3', style: 'margin-top:8px' },
         el('section', {}, el('h2', {}, `Guest requests (${reqs.length})`),
           reqs.length ? null : el('p', { class: 'muted' }, 'No open requests.'),
-          ...reqs.map(r => el('div', { class: 'card req ' + r.status, style: 'margin-bottom:10px' },
+          ...reqs.map(r => el('div', { class: 'card req ' + r.status + (r.escalated && r.status === 'open' ? ' late' : ''), style: 'margin-bottom:10px' },
+            r.escalated && r.status === 'open' ? el('div', { class: 'small', style: 'color:var(--bad);font-weight:700' }, '⚠ Waiting over 2 minutes') : null,
             el('div', { class: 'row between' }, el('b', {}, `Table ${r.tableId}: ${r.type}`), el('span', { class: 'small muted' }, ago(r.createdAt))),
             el('div', { class: 'row', style: 'margin-top:8px' },
               r.status === 'open' ? el('button', { class: 'primary', onclick: () => reqAct(r, 'claim') }, "I'm on it") : el('span', { class: 'small' }, 'Claimed ' + ago(r.claimedAt) + ' ago'),
@@ -67,6 +68,7 @@
   }
   live((type, p) => {
     if ((type === 'order' && p.status === 'PendingApproval') || (type === 'request' && p.status === 'open')) {
+      if (type === 'request' && p.escalated) { toast(`⚠ Table ${p.tableId} has waited over 2 minutes`, 6000); load(); return; }
       try { navigator.vibrate && navigator.vibrate(200); } catch {}
       toast(type === 'order' ? `New order from table ${p.tableId}` : `Table ${p.tableId} needs: ${p.type}`);
     }

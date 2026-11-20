@@ -9,17 +9,18 @@ const { quote, canTransition, OrderError, ACTIVE } = require('./lib/orders');
 const auth = require('./lib/auth');
 
 const PORT = Number(process.env.PORT || 3000);
-const store = new Store(process.env.DATA_DIR || path.join(__dirname, 'data'));
+const { ALLERGENS } = require('./lib/seed');
+const { dailyReport } = require('./lib/report');
+const store = new Store({ dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'), databaseUrl: process.env.DATABASE_URL });
 const D = () => store.data;
+let SECRET;
 
-if (!D().secret) { D().secret = crypto.randomBytes(32).toString('hex'); store.saveNow(); }
-const SECRET = process.env.APP_SECRET || D().secret;
-const PINS = {
-  admin: process.env.ADMIN_PIN || '1111',
-  staff: process.env.STAFF_PIN || '2222',
-  kitchen: process.env.KITCHEN_PIN || '3333'
-};
-const DEFAULT_PINS = !process.env.ADMIN_PIN || !process.env.STAFF_PIN || !process.env.KITCHEN_PIN;
+// Login sources, in order: named staff accounts (Admin > Staff), then env PINs,
+// then built-in setup PINs 1111/2222/3333 ONLY while no env PINs and no admin account exist.
+const ENV_PINS = { admin: process.env.ADMIN_PIN, staff: process.env.STAFF_PIN, kitchen: process.env.KITCHEN_PIN };
+const SETUP_PINS = { admin: '1111', staff: '2222', kitchen: '3333' };
+const hasEnvPins = () => Object.values(ENV_PINS).some(Boolean);
+const setupMode = () => !hasEnvPins() && !D().users.some(u => u.active && u.role === 'admin');
 
 // ---------- helpers ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
@@ -50,11 +51,21 @@ function readBody(req) {
 function cookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').map(s => s.trim().split('=')).filter(p => p[0]).map(([k, ...v]) => [k, decodeURIComponent(v.join('='))]));
 }
-function roleOf(req) { return auth.verifySession(SECRET, cookies(req).mos); }
+// Returns { role, uid, name } for a valid session, or null. Deactivated users are rejected immediately.
+function who(req) {
+  const s = auth.verifySession(SECRET, cookies(req).mos);
+  if (!s) return null;
+  if (s.uid === 'setup' && !setupMode()) return null; // setup PINs die as soon as a real admin exists
+  if (s.uid === 'env' && !ENV_PINS[s.role]) return null;
+  if (s.uid === 'env' || s.uid === 'setup') return { ...s, name: `${s.role} (${s.uid === 'env' ? 'shared PIN' : 'setup PIN'})` };
+  const u = D().users.find(x => x.id === s.uid);
+  if (!u || !u.active || u.role !== s.role) return null;
+  return { ...s, name: u.name };
+}
 function need(req, roles) {
-  const r = roleOf(req);
-  if (!r || !roles.includes(r)) throw new OrderError('UNAUTHORIZED', 'Please sign in', 401);
-  return r;
+  const w = who(req);
+  if (!w || !roles.includes(w.role)) throw new OrderError('UNAUTHORIZED', 'Please sign in', 401);
+  return w;
 }
 function baseUrl(req) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
@@ -97,7 +108,7 @@ function staffState() {
   const d = D();
   const since = Date.now() - 12 * 3600e3;
   return {
-    restaurant: d.restaurant, settings: d.settings, defaultPins: DEFAULT_PINS,
+    restaurant: d.restaurant, settings: d.settings, defaultPins: setupMode(),
     tables: d.tables.map(t => ({ id: t.id, label: t.label })),
     orders: d.orders.filter(o => ACTIVE.includes(o.status) || Date.parse(o.createdAt) > since).map(publicOrder),
     requests: d.requests.filter(r => r.status !== 'closed' || Date.parse(r.createdAt) > since)
@@ -125,19 +136,18 @@ function createOrder(table, body) {
   };
   d.orders.push(order);
   store.audit('guest:' + table.id, 'order.create', { no: order.no, total: order.total });
-  store.save();
-  broadcast('order', publicOrder(order));
   return { order, duplicate: false };
 }
 
-function transition(orderId, to, role, reason) {
+function transition(orderId, to, actor, reason) {
+  const role = actor.role;
   const o = D().orders.find(x => x.id === orderId);
   if (!o) throw new OrderError('NOT_FOUND', 'Order not found', 404);
   if (!canTransition(o.status, to, role)) throw new OrderError('BAD_TRANSITION', `Cannot move order from ${o.status} to ${to}`, 409);
   const from = o.status;
   o.status = to;
-  o.events.push({ at: now(), status: to, actor: role, reason: reason ? String(reason).slice(0, 200) : undefined });
-  store.audit(role, 'order.status', { no: o.no, from, to, reason });
+  o.events.push({ at: now(), status: to, actor: actor.name, role, reason: reason ? String(reason).slice(0, 200) : undefined });
+  store.audit(actor.name, 'order.status', { no: o.no, from, to, reason });
   store.save();
   broadcast('order', publicOrder(o));
   return o;
@@ -155,7 +165,7 @@ async function handle(req, res) {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'");
 
-  if (p === '/healthz') return send(res, 200, { ok: true, orders: D().orders.length });
+  if (p === '/healthz') return send(res, store.lastError ? 503 : 200, { ok: !store.lastError, storage: store.driver.name, lastSavedAt: store.lastSavedAt, error: store.lastError || undefined });
 
   // ----- pages -----
   const pages = { '/': 'index.html', '/kitchen': 'kitchen.html', '/staff': 'staff.html', '/admin': 'admin.html', '/login': 'login.html' };
@@ -174,6 +184,11 @@ async function handle(req, res) {
       if (M === 'POST' && sub === '/orders') {
         if (limited('ord:' + table.id, 6, 60e3) || limited('ordip:' + ip(req), 10, 60e3)) throw new OrderError('RATE', 'Too many orders. Please wait a moment.', 429);
         const { order, duplicate } = createOrder(table, await readBody(req));
+        if (!duplicate) {
+          // Do not confirm to the guest until the order is durably stored.
+          try { await store.flush(); } catch { D().orders = D().orders.filter(o => o !== order); throw new OrderError('STORAGE', 'Could not save your order. Please try again or ask a waiter.', 503); }
+          broadcast('order', publicOrder(order));
+        }
         return send(res, duplicate ? 200 : 201, { order: publicOrder(order), duplicate });
       }
       if (M === 'GET' && sub === '/orders') {
@@ -202,14 +217,21 @@ async function handle(req, res) {
     if (M === 'POST' && p === '/api/login') {
       if (limited('login:' + ip(req), 8, 5 * 60e3)) throw new OrderError('RATE', 'Too many attempts. Try again in a few minutes.', 429);
       const { pin } = await readBody(req);
-      const role = Object.keys(PINS).find(r => auth.safeEq(PINS[r], String(pin || '')));
-      if (!role) { store.audit('anon', 'login.fail', { ip: ip(req) }); throw new OrderError('BAD_PIN', 'Wrong PIN', 401); }
-      store.audit(role, 'login', { ip: ip(req) }); store.save();
+      const pinStr = String(pin || '');
+      let found = null;
+      const rank = { admin: 0, staff: 1, kitchen: 2 };
+      for (const u of D().users.filter(u => u.active).sort((a, b) => rank[a.role] - rank[b.role])) {
+        if (auth.checkPin(pinStr, u.pinHash)) { found = { role: u.role, uid: u.id, name: u.name }; break; }
+      }
+      if (!found) for (const r of ['admin', 'staff', 'kitchen']) if (ENV_PINS[r] && auth.safeEq(ENV_PINS[r], pinStr)) { found = { role: r, uid: 'env', name: `${r} (shared PIN)` }; break; }
+      if (!found && setupMode()) for (const r of ['admin', 'staff', 'kitchen']) if (auth.safeEq(SETUP_PINS[r], pinStr)) { found = { role: r, uid: 'setup', name: `${r} (setup PIN)` }; break; }
+      if (!found) { store.audit('anon', 'login.fail', { ip: ip(req) }); store.save(); throw new OrderError('BAD_PIN', 'Wrong PIN', 401); }
+      store.audit(found.name, 'login', { ip: ip(req), role: found.role }); store.save();
       const secure = baseUrl(req).startsWith('https') ? '; Secure' : '';
-      return send(res, 200, { role }, { 'Set-Cookie': `mos=${auth.sessionCookie(SECRET, role)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=50400${secure}` });
+      return send(res, 200, { role: found.role, name: found.name }, { 'Set-Cookie': `mos=${auth.sessionCookie(SECRET, found.role, found.uid)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=50400${secure}` });
     }
     if (M === 'POST' && p === '/api/logout') return send(res, 200, { ok: true }, { 'Set-Cookie': 'mos=; Path=/; Max-Age=0' });
-    if (M === 'GET' && p === '/api/me') return send(res, 200, { role: roleOf(req) });
+    if (M === 'GET' && p === '/api/me') { const w = who(req); return send(res, 200, { role: w?.role || null, name: w?.name || null }); }
 
     // ----- staff / kitchen -----
     if (M === 'GET' && p === '/api/stream') {
@@ -223,13 +245,13 @@ async function handle(req, res) {
 
     const os = p.match(/^\/api\/orders\/([\w-]+)\/status$/);
     if (M === 'POST' && os) {
-      const role = need(req, ['kitchen', 'staff', 'admin']);
+      const actor = need(req, ['kitchen', 'staff', 'admin']);
       const body = await readBody(req);
-      return send(res, 200, { order: publicOrder(transition(os[1], String(body.to), role, body.reason)) });
+      return send(res, 200, { order: publicOrder(transition(os[1], String(body.to), actor, body.reason)) });
     }
     const rq = p.match(/^\/api\/requests\/([\w-]+)\/(claim|close)$/);
     if (M === 'POST' && rq) {
-      const role = need(req, ['staff', 'admin']);
+      const role = need(req, ['staff', 'admin']).name;
       const r = D().requests.find(x => x.id === rq[1]);
       if (!r) throw new OrderError('NOT_FOUND', 'Request not found', 404);
       if (rq[2] === 'claim' && r.status === 'open') { r.status = 'claimed'; r.claimedAt = now(); r.claimedBy = role; }
@@ -241,7 +263,7 @@ async function handle(req, res) {
 
     // ----- admin -----
     if (p.startsWith('/api/admin/')) {
-      const role = need(req, ['admin', ...(p === '/api/admin/availability' ? ['staff'] : [])]);
+      const role = need(req, ['admin', ...(p === '/api/admin/availability' ? ['staff'] : [])]).name;
       const d = D();
       if (M === 'GET' && p === '/api/admin/menu') return send(res, 200, d.menu);
       if (M === 'POST' && p === '/api/admin/availability') {
@@ -299,6 +321,123 @@ async function handle(req, res) {
         store.audit(role, 'table.rotate_qr', { id: t.id, nonce: t.nonce }); store.save();
         return send(res, 200, { ok: true });
       }
+      // ----- menu editor -----
+      const LANGS = ['en', 'fa', 'ps'];
+      const txt = (o, max, required) => {
+        const out = {};
+        for (const l of LANGS) out[l] = String((o && o[l]) || '').trim().slice(0, max);
+        if (required && !out.en) throw new OrderError('BAD_NAME', 'English name is required');
+        return out;
+      };
+      const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+      const bump = () => { d.menu.version++; d.menu.publishedAt = now(); };
+      if (M === 'POST' && p === '/api/admin/items') {
+        const b = await readBody(req);
+        if (!d.menu.categories.some(c => c.id === b.cat)) throw new OrderError('BAD_CAT', 'Choose a category');
+        const price = Number(b.price);
+        if (!Number.isInteger(price) || price < 0 || price > 1e7) throw new OrderError('BAD_PRICE', 'Price must be a whole number');
+        const allergens = [...new Set((Array.isArray(b.allergens) ? b.allergens : []).filter(a => ALLERGENS.includes(a)))];
+        const fields = { cat: b.cat, price, spicy: !!b.spicy, name: txt(b.name, 60, true), desc: txt(b.desc, 160, false), allergens };
+        let it = b.id ? d.menu.items.find(i => i.id === b.id) : null;
+        if (b.id && !it) throw new OrderError('NOT_FOUND', 'Item not found', 404);
+        if (it) {
+          // Any allergen change invalidates the manager's allergen sign-off.
+          if ([...it.allergens].sort().join() !== [...allergens].sort().join()) d.menu.allergenReview = null;
+          Object.assign(it, fields);
+        } else {
+          let id = slug(fields.name.en) || 'item'; while (d.menu.items.some(i => i.id === id)) id += '-2';
+          it = { id, available: true, ...fields };
+          d.menu.items.push(it);
+          if (allergens.length) d.menu.allergenReview = null;
+        }
+        bump(); store.audit(role, b.id ? 'menu.item.edit' : 'menu.item.add', { id: it.id, price, version: d.menu.version }); store.save();
+        broadcast('menu', { itemId: it.id });
+        return send(res, 200, { item: it });
+      }
+      const delItem = p.match(/^\/api\/admin\/items\/([\w-]+)\/delete$/);
+      if (M === 'POST' && delItem) {
+        const i = d.menu.items.findIndex(x => x.id === delItem[1]);
+        if (i < 0) throw new OrderError('NOT_FOUND', 'Item not found', 404);
+        const [gone] = d.menu.items.splice(i, 1); // past orders keep their own snapshot
+        bump(); store.audit(role, 'menu.item.delete', { id: gone.id, name: gone.name.en }); store.save();
+        broadcast('menu', { itemId: gone.id });
+        return send(res, 200, { ok: true });
+      }
+      if (M === 'POST' && p === '/api/admin/categories') {
+        const b = await readBody(req);
+        const name = txt(b.name, 40, true);
+        let c = b.id ? d.menu.categories.find(x => x.id === b.id) : null;
+        if (c) c.name = name;
+        else { let id = slug(name.en) || 'cat'; while (d.menu.categories.some(x => x.id === id)) id += '-2'; c = { id, name }; d.menu.categories.push(c); }
+        if (Number.isInteger(b.move) && b.move) {
+          const i = d.menu.categories.indexOf(c), j = Math.max(0, Math.min(d.menu.categories.length - 1, i + b.move));
+          d.menu.categories.splice(i, 1); d.menu.categories.splice(j, 0, c);
+        }
+        bump(); store.audit(role, 'menu.category.save', { id: c.id }); store.save(); broadcast('menu', {});
+        return send(res, 200, { category: c });
+      }
+      const delCat = p.match(/^\/api\/admin\/categories\/([\w-]+)\/delete$/);
+      if (M === 'POST' && delCat) {
+        if (d.menu.items.some(i => i.cat === delCat[1])) throw new OrderError('NOT_EMPTY', 'Move or delete the dishes in this category first', 409);
+        d.menu.categories = d.menu.categories.filter(c => c.id !== delCat[1]);
+        bump(); store.audit(role, 'menu.category.delete', { id: delCat[1] }); store.save(); broadcast('menu', {});
+        return send(res, 200, { ok: true });
+      }
+
+      // ----- staff accounts -----
+      if (M === 'GET' && p === '/api/admin/users') {
+        return send(res, 200, { users: d.users.map(({ pinHash, ...u }) => u), envPins: Object.fromEntries(Object.entries(ENV_PINS).map(([k, v]) => [k, !!v])), setupMode: setupMode() });
+      }
+      if (M === 'POST' && p === '/api/admin/users') {
+        const b = await readBody(req);
+        const name = String(b.name || '').trim().slice(0, 40);
+        if (!name) throw new OrderError('BAD_NAME', 'Name is required');
+        if (!auth.ROLES.includes(b.role)) throw new OrderError('BAD_ROLE', 'Choose a role');
+        if (!auth.validPin(b.pin)) throw new OrderError('BAD_PIN', 'PIN must be 4 to 8 digits');
+        if (d.users.some(u => u.active && auth.checkPin(b.pin, u.pinHash)) || Object.values(ENV_PINS).includes(String(b.pin))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
+        d.counters.user = (d.counters.user || 0) + 1;
+        const u = { id: 'u' + d.counters.user, name, role: b.role, active: true, createdAt: now(), pinHash: auth.hashPin(b.pin) };
+        d.users.push(u);
+        store.audit(role, 'user.add', { id: u.id, name, role: u.role }); store.save();
+        return send(res, 201, { id: u.id });
+      }
+      const ua = p.match(/^\/api\/admin\/users\/(\w+)\/(deactivate|activate|pin)$/);
+      if (M === 'POST' && ua) {
+        const u = d.users.find(x => x.id === ua[1]);
+        if (!u) throw new OrderError('NOT_FOUND', 'User not found', 404);
+        if (ua[2] === 'pin') {
+          const { pin } = await readBody(req);
+          if (!auth.validPin(pin)) throw new OrderError('BAD_PIN', 'PIN must be 4 to 8 digits');
+          if (d.users.some(x => x !== u && x.active && auth.checkPin(pin, x.pinHash))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
+          u.pinHash = auth.hashPin(pin);
+        } else {
+          const me = need(req, ['admin']);
+          if (ua[2] === 'deactivate' && me.uid === u.id) throw new OrderError('SELF', 'You cannot deactivate yourself', 409);
+          if (ua[2] === 'deactivate' && u.role === 'admin' && !hasEnvPins() && d.users.filter(x => x.active && x.role === 'admin').length === 1) throw new OrderError('LAST_ADMIN', 'Keep at least one active admin', 409);
+          u.active = ua[2] === 'activate';
+        }
+        store.audit(role, 'user.' + ua[2], { id: u.id, name: u.name }); store.save();
+        return send(res, 200, { ok: true });
+      }
+
+      // ----- reporting -----
+      if (M === 'GET' && p === '/api/admin/report') {
+        const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+        const tz = Number(url.searchParams.get('tz') || 0);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(tz)) throw new OrderError('BAD_DATE', 'Invalid date');
+        return send(res, 200, dailyReport(d, date, tz));
+      }
+
+      // ----- backup / restore -----
+      if (M === 'GET' && p === '/api/admin/backup.json') {
+        store.audit(role, 'backup.download', {}); store.save();
+        const { secret, ...doc } = d;
+        return send(res, 200, JSON.stringify(doc), { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="mehmaanos-backup-${now().slice(0, 10)}.json"` });
+      }
+      if (M === 'GET' && p === '/api/admin/system') {
+        return send(res, 200, { storage: store.driver.name, lastSavedAt: store.lastSavedAt, error: store.lastError, backups: await store.driver.listBackups(), node: process.version, uptimeSec: Math.round(process.uptime()) });
+      }
+
       if (M === 'GET' && p === '/api/admin/audit') return send(res, 200, { audit: d.audit.slice(-300).reverse() });
       if (M === 'GET' && p === '/api/admin/export.csv') {
         const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -322,8 +461,23 @@ function serveFile(res, rel) {
 }
 
 const server = http.createServer((req, res) => { handle(req, res).catch(e => err(res, e)); });
-server.listen(PORT, () => console.log(`MehmaanOS listening on :${PORT}${DEFAULT_PINS ? ' (WARNING: default PINs in use, set ADMIN_PIN/STAFF_PIN/KITCHEN_PIN)' : ''}`));
-const shutdown = () => { try { store.saveNow(); } catch {} process.exit(0); };
-process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 
-module.exports = { server };
+async function start() {
+  await store.init();
+  if (!D().secret) { D().secret = crypto.randomBytes(32).toString('hex'); await store.flush(); }
+  SECRET = process.env.APP_SECRET || D().secret;
+  // Escalate guest requests nobody has claimed for 2 minutes (re-announced to all staff screens).
+  setInterval(() => {
+    const cutoff = Date.now() - 120e3;
+    for (const r of D().requests) if (r.status === 'open' && !r.escalated && Date.parse(r.createdAt) < cutoff) {
+      r.escalated = true; store.audit('system', 'request.escalate', { no: r.no, table: r.tableId }); store.save(); broadcast('request', r);
+    }
+  }, 15e3).unref();
+  await new Promise(r => server.listen(PORT, r));
+  console.log(`MehmaanOS listening on :${PORT} · storage=${store.driver.name}${setupMode() ? ' · SETUP MODE: setup PINs 1111/2222/3333 active until an admin account or env PINs exist' : ''}`);
+}
+const shutdown = async () => { server.close(); await store.close(); process.exit(0); };
+process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
+if (require.main === module) start().catch(e => { console.error('Failed to start', e); process.exit(1); });
+
+module.exports = { server, start, store };

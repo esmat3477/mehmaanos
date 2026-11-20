@@ -52,7 +52,32 @@ test('table QR tokens verify and are revoked by rotation', () => {
   assert.strictEqual(auth.verifyTableToken('s3cret', tables, tok), null);
 });
 test('staff sessions reject tampered roles', () => {
-  const c = auth.sessionCookie('k', 'kitchen');
-  assert.strictEqual(auth.verifySession('k', c), 'kitchen');
+  const c = auth.sessionCookie('k', 'kitchen', 'u1');
+  assert.deepStrictEqual(auth.verifySession('k', c), { role: 'kitchen', uid: 'u1' });
   assert.strictEqual(auth.verifySession('k', c.replace('kitchen', 'admin')), null);
+});
+
+test('PINs are hashed and checked', () => {
+  const h = auth.hashPin('4821');
+  assert.ok(!h.includes('4821'));
+  assert.ok(auth.checkPin('4821', h));
+  assert.ok(!auth.checkPin('4822', h));
+  assert.ok(!auth.validPin('12') && !auth.validPin('12ab') && auth.validPin('123456'));
+});
+test('daily report: totals, exceptions and timings', () => {
+  const { dailyReport } = require('../lib/report');
+  const d = seed();
+  const mk = (no, status, total, evs) => ({ no, tableId: 'T1', status, total, createdAt: '2026-11-20T10:00:00Z',
+    lines: [{ itemId: 'naan', name: { en: 'Afghan naan' }, qty: 1, lineTotal: total }], events: evs });
+  d.orders = [
+    mk(1, 'Closed', 100, [{ status: 'PendingApproval', at: '2026-11-20T10:00:00Z' }, { status: 'Accepted', at: '2026-11-20T10:01:00Z' }, { status: 'Ready', at: '2026-11-20T10:11:00Z' }, { status: 'Served', at: '2026-11-20T10:12:00Z' }, { status: 'Closed', at: '2026-11-20T10:40:00Z' }]),
+    mk(2, 'Rejected', 50, [{ status: 'PendingApproval', at: '2026-11-20T10:00:00Z' }, { status: 'Rejected', at: '2026-11-20T10:02:00Z', actor: 'Ali', reason: 'kitchen closed' }])
+  ];
+  const r = dailyReport(d, '2026-11-20', 0);
+  assert.strictEqual(r.orders.total, 2);
+  assert.strictEqual(r.orders.valueAccepted, 100);
+  assert.strictEqual(r.exceptions[0].reason, 'kitchen closed');
+  assert.strictEqual(r.timesSec.submitToAccept.avg, 60);
+  assert.strictEqual(r.timesSec.acceptToReady.avg, 600);
+  assert.strictEqual(dailyReport(d, '2026-11-21', 0).orders.total, 0);
 });

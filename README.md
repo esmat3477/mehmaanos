@@ -1,49 +1,49 @@
-# MehmaanOS: phase-one pilot
+# MehmaanOS
 
 *Every guest welcomed. Every order connected.*
 
-QR table ordering for a single restaurant: guest menu (English, Dari, Pashto), kitchen display, floor/waiter dashboard and admin. Built to match the MVP scope (MVP-01 to MVP-07) in the MehmaanOS Business Proposal and the gates in the Technical & QA Assessment. Hosted on **Aria Run** (ariacloudservices.org).
+QR table ordering for restaurants: guest menu in English, Dari and Pashto, kitchen display, waiter dashboard and manager admin. Scope follows the MehmaanOS Business Proposal (MVP-01 to MVP-07) and the release gates in the Technical & QA Assessment. Product concept by Aria Cloud Services.
 
-> **Status: pilot prototype with DEMO menu data.** Prices, dishes and allergens are placeholders. Dari/Pashto text needs native-speaker review. Not cleared for live service or payments.
+> **Status: pilot-ready code with DEMO menu data.** Before real service: replace the menu, have a native speaker check Dari/Pashto, have a manager confirm allergens, and run a supervised pilot. Payments are deliberately out of scope.
 
 ## Screens
 | URL | Who | What |
 |---|---|---|
-| `/t/<token>` | Guest | Menu, cart, send order, live status, call waiter / bill / water |
-| `/staff` | Waiter | Table map, approve/reject orders, guest requests, mark served/closed |
-| `/kitchen` | Kitchen | New / Cooking / Ready columns, timers, late alerts, chime |
-| `/admin` | Manager | Prices, sold-out, allergen sign-off, QR codes (print/rotate), settings, audit log, CSV export |
+| `/t/<token>` | Guest | Menu (EN/دری/پښتو), cart, send order, live status, call waiter / bill / water |
+| `/staff` | Waiter | Table map, approve/reject orders, guest requests (flagged after 2 min), mark served/closed |
+| `/kitchen` | Kitchen | New / Cooking / Ready, timers, late tickets after 20 min, sound on new order |
+| `/admin` | Manager | Menu editor, sold-out, allergen sign-off, QR codes, staff accounts, daily report, settings, backups, audit log |
 
-## Built-in safeguards (from the QA report)
-- **Server-side pricing** in whole AFN: the browser never sets prices or totals.
-- **Idempotent orders**: a retry after a network error can never create a duplicate ticket.
-- **Order snapshots**: changing the menu never changes past orders.
-- **State machine with roles**: e.g. kitchen cannot approve; nothing skips "preparing"; closed is final.
-- **Signed, revocable table QR codes**: "New QR" kills a copied code.
-- **Staff approval before kitchen** (default on), **pause ordering** switch, rate limits, PIN login with lockout.
-- **Allergen warning** shown to guests until a named manager confirms the data.
-- **Audit log** of every action, plus CSV export for daily reconciliation.
-- **No online payments**: payment stays with staff/existing till, as both reports require.
+## Safeguards
+- **Prices and totals are calculated by the server** in whole AFN; the guest's phone cannot change them.
+- **No duplicate orders**: a retry after a dropped connection returns the same order. The guest only sees "sent" after the order is saved.
+- **Order history is frozen**: menu edits or deletions never change past orders.
+- **Order state machine with roles**: kitchen cannot approve; nothing skips "preparing"; closed is final; every step records who and when.
+- **Signed table QR codes**, revocable per table ("New QR").
+- **Named staff accounts** with their own hashed PINs; deactivation signs them out immediately. Setup PINs `1111/2222/3333` work only until the first Manager account (or env PINs) exists.
+- **Staff approval before kitchen** (default on), **pause ordering** switch, rate limits, login lockout.
+- **Allergen sign-off**: guests see a warning until a named manager confirms; any allergen edit voids the sign-off.
+- **Audit log**, **daily reconciliation report**, CSV export, automatic backups every 6 h (last 28 kept) + manual download.
 
-## Deploy on Aria Run
-- Runtime: Node.js · Port `3000` · 0.5 vCPU / 1 GB is enough for the pilot
-- Environment variables (set these before real use):
-  ```
-  ADMIN_PIN=xxxx
-  STAFF_PIN=xxxx
-  KITCHEN_PIN=xxxx
-  APP_SECRET=<long random string>
-  PUBLIC_URL=https://<your app domain>
-  ```
-  Without the PINs the defaults `1111` / `2222` / `3333` apply and the dashboard shows a red warning.
-- Data is stored in `DATA_DIR` (default `./data`) as a JSON file. **If the container is redeployed without a persistent volume, orders reset.** Fine for demos; move to PostgreSQL before live service.
+## Configuration
+| Variable | Required | Purpose |
+|---|---|---|
+| `DATABASE_URL` | **Yes for live use** | PostgreSQL connection string. Without it, data is a JSON file and can be lost on redeploy. Tables are created automatically. |
+| `APP_SECRET` | Recommended | Long random string for signing QR codes and sessions. If unset, one is generated and stored in the database. Changing it invalidates all printed QR codes. |
+| `PUBLIC_URL` | Recommended | e.g. `https://mehmaanos.example.af`, used in QR codes. Otherwise taken from the request. |
+| `ADMIN_PIN` / `STAFF_PIN` / `KITCHEN_PIN` | Optional | Shared fallback PINs. Prefer named accounts under Admin → Staff. |
+| `PORT` | Optional | Default `3000`. |
+| `DATA_DIR` | Optional | Folder for the JSON file when no database is set. |
 
-## Run locally
+## Run
 ```
-npm start        # http://localhost:3000
-npm test         # 8 tests: pricing, idempotency, state machine, QR revocation, full API flow
+npm install
+npm start                 # http://localhost:3000, then sign in with 1111 and create your Manager account
+npm test                  # 15 tests; set TEST_DATABASE_URL to include the PostgreSQL test
 ```
-No dependencies. Node 18+.
+Node 18+. One runtime dependency (`pg`). Health check: `GET /healthz`.
 
 ## Not included (separate decisions per the proposal)
-Online payments, split bills, POS/fiscal integration, multi-restaurant SaaS, loyalty/reviews.
+Online payments, split bills, POS/fiscal integration, multi-restaurant SaaS, loyalty/reviews, photos.
+
+See **HANDOVER.md** for deployment on Aria Run.
