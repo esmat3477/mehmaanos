@@ -17,6 +17,8 @@ async function boot(env) {
 test.before(async () => { ({ p: proc, b: base } = await boot({ ADMIN_PIN: '9001', STAFF_PIN: '9002', KITCHEN_PIN: '9003' })); });
 test.after(() => proc.kill());
 
+let ADMIN;
+const adminLogin = async () => ADMIN || (ADMIN = (await j('POST', '/api/login', { pin: '9001' })).cookie);
 const j = async (method, url, body, cookie) => {
   const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text(), cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
@@ -24,7 +26,7 @@ const j = async (method, url, body, cookie) => {
 
 test('full flow: QR order -> approval -> kitchen -> served, with idempotency and auth', async () => {
   assert.strictEqual((await j('POST', '/api/login', { pin: '0000' })).status, 401);
-  const admin = (await j('POST', '/api/login', { pin: '9001' })).cookie;
+  const admin = await adminLogin();
   const kitchen = (await j('POST', '/api/login', { pin: '9003' })).cookie;
   const { body: { tables } } = await j('GET', '/api/admin/tables', null, admin);
   const token = tables[0].url.split('/t/')[1];
@@ -66,7 +68,7 @@ test('full flow: QR order -> approval -> kitchen -> served, with idempotency and
 });
 
 test('menu editor: add, edit, delete; allergen change voids sign-off; snapshots survive', async () => {
-  const admin = (await j('POST', '/api/login', { pin: '9001' })).cookie;
+  const admin = await adminLogin();
   await j('POST', '/api/admin/allergen-review', { by: 'Manager Test' }, admin);
   assert.ok((await j('GET', '/api/admin/menu', null, admin)).body.allergenReview);
   const add = await j('POST', '/api/admin/items', { cat: 'mains', price: 410, name: { en: 'Qabili Special', fa: 'قابلی ویژه' }, allergens: ['nuts', 'bogus'] }, admin);
@@ -89,7 +91,7 @@ test('menu editor: add, edit, delete; allergen change voids sign-off; snapshots 
 });
 
 test('named staff accounts: login, audit by name, deactivation kills session, unique PINs', async () => {
-  const admin = (await j('POST', '/api/login', { pin: '9001' })).cookie;
+  const admin = await adminLogin();
   assert.strictEqual((await j('POST', '/api/admin/users', { name: 'Farid', role: 'staff', pin: '12' }, admin)).status, 400);
   const u = await j('POST', '/api/admin/users', { name: 'Farid', role: 'staff', pin: '482915' }, admin);
   assert.strictEqual(u.status, 201);
@@ -106,7 +108,7 @@ test('named staff accounts: login, audit by name, deactivation kills session, un
 });
 
 test('report and health endpoints', async () => {
-  const admin = (await j('POST', '/api/login', { pin: '9001' })).cookie;
+  const admin = await adminLogin();
   const r = await j('GET', `/api/admin/report?date=${new Date().toISOString().slice(0, 10)}&tz=0`, null, admin);
   assert.strictEqual(r.status, 200);
   assert.ok(r.body.orders.total >= 2);
@@ -127,4 +129,30 @@ test('setup PINs work only until a real admin exists', async () => {
     assert.strictEqual((await jj('GET', '/api/state', null, setup.cookie)).status, 401, 'old setup session revoked');
     assert.strictEqual((await jj('POST', '/api/login', { pin: '7391' })).status, 200);
   } finally { p.kill(); }
+});
+
+test('Dubai setup: UAE preset gives AED, 5% VAT included, Arabic; orders carry VAT; old orders unchanged', async () => {
+  const admin = await adminLogin();
+  const { body: { tables: t0 } } = await j('GET', '/api/admin/tables', null, admin);
+  const first = await j('POST', `/api/guest/${t0[5].url.split('/t/')[1]}/orders`, { idemKey: 'beforedubai1', cart: [{ itemId: 'naan', qty: 2 }] });
+  const before = first.body.order;
+  const s = await j('POST', '/api/admin/settings', { preset: 'AE', restaurantName: 'Kabul Darbar Dubai' }, admin);
+  assert.deepStrictEqual([s.body.restaurant.currency, s.body.restaurant.tax.mode, s.body.restaurant.tax.rate], ['AED', 'inclusive', 500]);
+  assert.ok(s.body.restaurant.languages.includes('ar'));
+  // AED 42.00 = 4200 fils, with an Arabic name
+  const it = await j('POST', '/api/admin/items', { cat: 'mains', price: 4200, name: { en: 'Kabuli Pulao (Dubai)', ar: 'كابلي بلاو' }, allergens: [] }, admin);
+  assert.strictEqual(it.body.item.name.ar, 'كابلي بلاو');
+  const { body: { tables } } = await j('GET', '/api/admin/tables', null, admin);
+  const tok = tables[4].url.split('/t/')[1];
+  const menu = await j('GET', `/api/guest/${tok}/menu`);
+  assert.strictEqual(menu.body.restaurant.currency, 'AED');
+  const o = await j('POST', `/api/guest/${tok}/orders`, { idemKey: 'dubai000001', cart: [{ itemId: it.body.item.id, qty: 2 }] });
+  assert.strictEqual(o.body.order.total, 8400, 'guest pays exactly the menu price (VAT included)');
+  assert.strictEqual(o.body.order.tax, 400, 'AED 84.00 incl. 5% VAT = AED 4.00 VAT');
+  assert.strictEqual(o.body.order.currency, 'AED');
+  const again = (await j('GET', '/api/state', null, admin)).body.orders.find(x => x.id === before.id);
+  assert.strictEqual(again.total, before.total, 'earlier orders keep their original currency amounts');
+  assert.strictEqual((await j('POST', '/api/admin/settings', { tax: { mode: 'inclusive', rate: 9000 } }, admin)).status, 400, 'absurd tax rate refused');
+  const csv = await j('GET', '/api/admin/export.csv', null, admin);
+  assert.match(csv.body, /"AED","2"/);
 });

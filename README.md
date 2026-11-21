@@ -2,7 +2,7 @@
 
 *Every guest welcomed. Every order connected.*
 
-QR table ordering for restaurants: guest menu in English, Dari and Pashto, kitchen display, waiter dashboard and manager admin. Scope follows the MehmaanOS Business Proposal (MVP-01 to MVP-07) and the release gates in the Technical & QA Assessment. Product concept by Aria Cloud Services.
+QR table ordering for restaurants in any country: guest menu in English, Arabic, Dari, Pashto, Urdu and Hindi (each restaurant chooses), kitchen display, waiter dashboard and manager admin. Scope follows the MehmaanOS Business Proposal (MVP-01 to MVP-07) and the release gates in the Technical & QA Assessment. Product concept by Aria Cloud Services.
 
 > **Status: pilot-ready code with DEMO menu data.** Before real service: replace the menu, have a native speaker check Dari/Pashto, have a manager confirm allergens, and run a supervised pilot. Payments are deliberately out of scope.
 
@@ -26,6 +26,13 @@ QR table ordering for restaurants: guest menu in English, Dari and Pashto, kitch
 - **Allergen sign-off**: guests see a warning until a named manager confirms; any allergen edit voids the sign-off.
 - **Audit log**, **daily reconciliation report**, CSV export, automatic backups every 6 h (last 28 kept) + manual download.
 
+## Countries, currency and tax
+Admin → Settings → *Country, currency & tax*.
+- **Quick setup**: 🇦🇪 UAE / Dubai (AED, 5% VAT included in menu prices, as the UAE tax authority requires; Arabic, Hindi, Urdu, Dari) and 🇦🇫 Afghanistan (AFN, no tax, Dari, Pashto).
+- **Any other country**: choose currency (AED, SAR, QAR, EUR, GBP, USD, PKR, INR, AFN), tax mode (included / added on top / none), rate and label. Confirm local rules with an accountant.
+- **Per-dish tax rate** for countries with different rates for food and drinks.
+- Every order stores its own currency, VAT and amounts; the daily report and CSV show tax. Changing currency never converts existing prices.
+
 ## Configuration
 | Variable | Required | Purpose |
 |---|---|---|
@@ -40,8 +47,9 @@ QR table ordering for restaurants: guest menu in English, Dari and Pashto, kitch
 ```
 npm install
 npm start                 # http://localhost:3000, then sign in with 1111 and create your Manager account
-npm test                  # 15 tests; set TEST_DATABASE_URL to include the PostgreSQL test
+npm test                  # 17 tests; set TEST_DATABASE_URL to include the PostgreSQL test
 python tools/e2e_phone_outage.py   # 20 browser tests (needs: pip install playwright)
+python tools/e2e_dubai.py          # Dubai flow: UAE preset, Arabic guest, VAT
 ```
 Node 18+. One runtime dependency (`pg`). Health check: `GET /healthz`.
 

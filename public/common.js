@@ -23,11 +23,17 @@ window.MOS = (() => {
     for (const k of kids.flat()) if (k != null && k !== false) n.append(k.nodeType ? k : document.createTextNode(String(k)));
     return n;
   }
-  function money(n, cur = 'AFN', lang = 'en') {
-    const loc = lang === 'fa' ? 'fa-AF' : lang === 'ps' ? 'ps-AF' : 'en-US';
-    let s; try { s = new Intl.NumberFormat(loc).format(n); } catch { s = String(n); }
-    return lang === 'en' ? `${s} ${cur}` : `${s} ؋`;
+  // Amounts are integer minor units (fils, cents; whole afghani for AFN).
+  const DEC = { AFN: 0, AED: 2, SAR: 2, QAR: 2, EUR: 2, GBP: 2, USD: 2, PKR: 0, INR: 0 };
+  const LOCALE = { en: 'en-US', fa: 'fa-AF', ps: 'ps-AF', ar: 'ar-AE', ur: 'ur-PK', hi: 'hi-IN' };
+  const RTL = ['fa', 'ps', 'ar', 'ur'];
+  function money(minor, cur = 'AFN', lang = 'en') {
+    const dec = DEC[cur] ?? 2, v = (minor || 0) / 10 ** dec;
+    try { return new Intl.NumberFormat(LOCALE[lang] || 'en-US', { style: 'currency', currency: cur, minimumFractionDigits: dec, maximumFractionDigits: dec }).format(v); }
+    catch { return `${v.toFixed(dec)} ${cur}`; }
   }
+  const toMinor = (major, cur) => Math.round(Number(major) * 10 ** (DEC[cur] ?? 2));
+  const toMajor = (minor, cur) => ((minor || 0) / 10 ** (DEC[cur] ?? 2)).toFixed(DEC[cur] ?? 2);
   function ago(iso) {
     const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
     const m = Math.floor(s / 60); return m ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`;
@@ -64,5 +70,5 @@ window.MOS = (() => {
     Ready: 'Ready', Served: 'Served', Closed: 'Closed', Rejected: 'Rejected', Canceled: 'Canceled'
   };
   function fill(node, ...kids) { node.replaceChildren(...kids.flat().filter(k => k != null && k !== false)); }
-  return { fill, api, el, money, ago, toast, live, requireRole, logout, STATUS, setStatus };
+  return { fill, api, el, money, toMinor, toMajor, RTL, DEC, ago, toast, live, requireRole, logout, STATUS, setStatus };
 })();

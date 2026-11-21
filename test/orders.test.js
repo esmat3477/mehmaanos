@@ -81,3 +81,17 @@ test('daily report: totals, exceptions and timings', () => {
   assert.strictEqual(r.timesSec.acceptToReady.avg, 600);
   assert.strictEqual(dailyReport(d, '2026-11-21', 0).orders.total, 0);
 });
+
+test('tax: UAE 5% included in price, per-dish override, exclusive mode adds on top', () => {
+  const { taxOf } = require('../lib/locale');
+  assert.strictEqual(taxOf(10500, 500, 'inclusive'), 500, 'AED 105.00 incl. 5% contains AED 5.00');
+  assert.strictEqual(taxOf(10000, 500, 'exclusive'), 500);
+  assert.strictEqual(taxOf(10000, 500, 'none'), 0);
+  const m = menu(); m.items.find(i => i.id === 'doogh').taxRate = 1900;
+  const inc = quote(m, [{ itemId: 'kabuli', qty: 3 }, { itemId: 'doogh', qty: 1 }], { mode: 'inclusive', rate: 500 });
+  assert.strictEqual(inc.total, 350 * 3 + 50, 'inclusive: guest pays menu price');
+  assert.strictEqual(inc.lines[0].tax, Math.round(1050 * 500 / 10500));
+  assert.strictEqual(inc.lines[1].taxRate, 1900, 'dish override wins');
+  const exc = quote(m, [{ itemId: 'kabuli', qty: 2 }], { mode: 'exclusive', rate: 1000 });
+  assert.strictEqual(exc.subtotal, 700); assert.strictEqual(exc.tax, 70); assert.strictEqual(exc.total, 770);
+});

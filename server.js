@@ -11,6 +11,7 @@ const auth = require('./lib/auth');
 const PORT = Number(process.env.PORT || 3000);
 const { ALLERGENS } = require('./lib/seed');
 const { dailyReport } = require('./lib/report');
+const { LANGS, CURRENCIES, PRESETS, TAX_MODES } = require('./lib/locale');
 const store = new Store({ dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'), databaseUrl: process.env.DATABASE_URL });
 const D = () => store.data;
 let SECRET;
@@ -94,7 +95,7 @@ setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 25e3).unr
 
 // ---------- views ----------
 function publicOrder(o) {
-  return { id: o.id, no: o.no, tableId: o.tableId, status: o.status, lines: o.lines, total: o.total, createdAt: o.createdAt, events: o.events };
+  return { id: o.id, no: o.no, tableId: o.tableId, status: o.status, lines: o.lines, subtotal: o.subtotal ?? o.total, tax: o.tax || 0, taxMode: o.taxMode || 'none', taxLabel: o.taxLabel, currency: o.currency, total: o.total, createdAt: o.createdAt, events: o.events };
 }
 function guestMenu() {
   const m = D().menu;
@@ -126,12 +127,12 @@ function createOrder(table, body) {
   if (existing) return { order: existing, duplicate: true };
   const open = d.orders.filter(o => o.tableId === table.id && ['PendingApproval', 'Accepted', 'InPreparation'].includes(o.status)).length;
   if (open >= 5) throw new OrderError('TOO_MANY_OPEN', 'This table has several open orders. Please ask a waiter.', 429);
-  const q = quote(d.menu, body.cart);
+  const q = quote(d.menu, body.cart, d.restaurant.tax);
   d.counters.order++;
   const status = d.settings.requireApproval ? 'PendingApproval' : 'Accepted';
   const order = {
     id: crypto.randomUUID(), no: d.counters.order, tableId: table.id, idemKey: idem,
-    status, lines: q.lines, total: q.total, menuVersion: q.menuVersion, currency: d.restaurant.currency,
+    status, lines: q.lines, subtotal: q.subtotal, tax: q.tax, taxMode: q.taxMode, taxLabel: d.restaurant.tax.label, total: q.total, menuVersion: q.menuVersion, currency: d.restaurant.currency,
     createdAt: now(), events: [{ at: now(), status, actor: 'guest' }]
   };
   d.orders.push(order);
@@ -299,6 +300,22 @@ async function handle(req, res) {
         if (typeof b.requireApproval === 'boolean') d.settings.requireApproval = b.requireApproval;
         if (typeof b.orderingPaused === 'boolean') d.settings.orderingPaused = b.orderingPaused;
         if (typeof b.restaurantName === 'string' && b.restaurantName.trim()) d.restaurant.name = b.restaurantName.trim().slice(0, 80);
+        const r = d.restaurant;
+        if (b.preset) {
+          const pr = PRESETS[b.preset]; if (!pr) throw new OrderError('BAD_PRESET', 'Unknown country preset');
+          Object.assign(r, JSON.parse(JSON.stringify(pr))); r.defaultLang = 'en';
+        }
+        if (b.currency !== undefined) { if (!(b.currency in CURRENCIES)) throw new OrderError('BAD_CURRENCY', 'Unsupported currency'); r.currency = b.currency; }
+        if (b.tax) {
+          const t = b.tax, rate = Number(t.rate);
+          if (!TAX_MODES.includes(t.mode) || !Number.isInteger(rate) || rate < 0 || rate > 5000) throw new OrderError('BAD_TAX', 'Tax rate must be between 0 and 50%');
+          r.tax = { mode: t.mode, rate: t.mode === 'none' ? 0 : rate, label: String(t.label || 'Tax').trim().slice(0, 12) || 'Tax' };
+        }
+        if (Array.isArray(b.languages)) {
+          const langs = [...new Set(['en', ...b.languages.filter(l => l in LANGS)])];
+          r.languages = langs; if (!langs.includes(r.defaultLang)) r.defaultLang = 'en';
+        }
+        if (b.defaultLang && r.languages.includes(b.defaultLang)) r.defaultLang = b.defaultLang;
         store.audit(role, 'settings', b); store.save(); broadcast('settings', d.settings);
         return send(res, 200, { settings: d.settings, restaurant: d.restaurant });
       }
@@ -322,10 +339,9 @@ async function handle(req, res) {
         return send(res, 200, { ok: true });
       }
       // ----- menu editor -----
-      const LANGS = ['en', 'fa', 'ps'];
       const txt = (o, max, required) => {
         const out = {};
-        for (const l of LANGS) out[l] = String((o && o[l]) || '').trim().slice(0, max);
+        for (const l of Object.keys(LANGS)) { const v = String((o && o[l]) || '').trim().slice(0, max); if (v || l === 'en') out[l] = v; }
         if (required && !out.en) throw new OrderError('BAD_NAME', 'English name is required');
         return out;
       };
@@ -337,7 +353,11 @@ async function handle(req, res) {
         const price = Number(b.price);
         if (!Number.isInteger(price) || price < 0 || price > 1e7) throw new OrderError('BAD_PRICE', 'Price must be a whole number');
         const allergens = [...new Set((Array.isArray(b.allergens) ? b.allergens : []).filter(a => ALLERGENS.includes(a)))];
-        const fields = { cat: b.cat, price, spicy: !!b.spicy, name: txt(b.name, 60, true), desc: txt(b.desc, 160, false), allergens };
+        let taxRate = null;
+        if (b.taxRate !== null && b.taxRate !== undefined && b.taxRate !== '') {
+          taxRate = Number(b.taxRate); if (!Number.isInteger(taxRate) || taxRate < 0 || taxRate > 5000) throw new OrderError('BAD_TAX', 'Dish tax rate must be between 0 and 50%');
+        }
+        const fields = { cat: b.cat, price, spicy: !!b.spicy, taxRate, name: txt(b.name, 60, true), desc: txt(b.desc, 160, false), allergens };
         let it = b.id ? d.menu.items.find(i => i.id === b.id) : null;
         if (b.id && !it) throw new OrderError('NOT_FOUND', 'Item not found', 404);
         if (it) {
@@ -441,8 +461,9 @@ async function handle(req, res) {
       if (M === 'GET' && p === '/api/admin/audit') return send(res, 200, { audit: d.audit.slice(-300).reverse() });
       if (M === 'GET' && p === '/api/admin/export.csv') {
         const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-        const rows = [['order_no', 'table', 'status', 'created_at', 'item', 'qty', 'unit_price', 'line_total', 'order_total', 'currency']];
-        for (const o of d.orders) for (const l of o.lines) rows.push([o.no, o.tableId, o.status, o.createdAt, l.name.en, l.qty, l.unitPrice, l.lineTotal, o.total, o.currency]);
+        // Amounts in minor units (e.g. fils for AED, whole afghani for AFN): see currency_decimals.
+        const rows = [['order_no', 'table', 'status', 'created_at', 'item', 'qty', 'unit_price', 'line_total', 'line_tax', 'tax_rate_pct', 'order_total', 'order_tax', 'tax_mode', 'currency', 'currency_decimals']];
+        for (const o of d.orders) for (const l of o.lines) rows.push([o.no, o.tableId, o.status, o.createdAt, l.name.en, l.qty, l.unitPrice, l.lineTotal, l.tax || 0, (l.taxRate || 0) / 100, o.total, o.tax || 0, o.taxMode || 'none', o.currency, CURRENCIES[o.currency] ?? 0]);
         return send(res, 200, rows.map(r => r.map(esc).join(',')).join('\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="mehmaanos-orders.csv"' });
       }
     }

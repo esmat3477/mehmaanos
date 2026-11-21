@@ -15,7 +15,7 @@ test('postgres driver persists across restarts and keeps backups', { skip: !url 
   const b = new Store({ databaseUrl: url }); await b.init();
   assert.strictEqual(b.data.restaurant.name, 'Persisted Kabul');
   assert.strictEqual(b.data.orders.length, 1);
-  assert.strictEqual(b.data.schema, 2);
+  assert.strictEqual(b.data.schema, 3);
   assert.ok((await b.driver.listBackups()).length >= 2);
   await b.close();
 });
