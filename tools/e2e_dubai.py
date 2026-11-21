@@ -1,20 +1,21 @@
 """Dubai end-to-end: manager applies UAE preset in the admin UI, adds Arabic names, guest orders in Arabic on a phone.
-Start a fresh server first:  PORT=3999 DATA_DIR=/tmp/dxb ADMIN_PIN=9001 node server.js
+Start a fresh server first:  PORT=3999 DATA_DIR=/tmp/dxb node server.js   (this script signs up restaurant 'dubai')
 Then:  python tools/e2e_dubai.py   (expects ORDER 8400 400 AED inclusive, overflow 0, errors [])
 Screenshots are written to /tmp/dxb_*.png"""
 import asyncio, json, urllib.request
 from playwright.async_api import async_playwright
-B='http://127.0.0.1:3999'
-def http(m,p,body=None,c=None):
-    r=urllib.request.Request(B+p,method=m,data=json.dumps(body).encode() if body is not None else None,headers={'content-type':'application/json',**({'cookie':c} if c else {})})
+ROOT='http://127.0.0.1:3999'; B=ROOT+'/r/dubai'
+def http(m,p,body=None,c=None,base=None):
+    r=urllib.request.Request((base or B)+p,method=m,data=json.dumps(body).encode() if body is not None else None,headers={'content-type':'application/json',**({'cookie':c} if c else {})})
     with urllib.request.urlopen(r) as x: return json.loads(x.read() or b'{}'), (x.headers.get('set-cookie') or '').split(';')[0]
 async def main():
     async with async_playwright() as p:
         b=await p.chromium.launch(); errs=[]
+        http('POST','/api/signup',{'restaurantName':'Kabul Darbar Dubai','slug':'dubai','country':'AF','ownerName':'Owner','contact':'o@example.com','pin':'9001','demoMenu':True,'terms':True},base=ROOT)
         # Manager sets up Dubai through the real admin UI
         a=await (await b.new_context(viewport={'width':1280,'height':900})).new_page(); a.on('pageerror',lambda e:errs.append(str(e)))
         a.on('dialog', lambda d: asyncio.ensure_future(d.accept()))
-        await a.goto(B+'/login'); await a.fill('#pin','9001'); await a.click('button.primary'); await a.wait_for_url('**/admin*')
+        await a.goto(B+'/login'); await a.fill('#pin','9001'); await a.click('button.primary'); await a.wait_for_url('**/r/dubai/admin*')
         await a.click('button:has-text("Settings")'); await a.click('text=UAE / Dubai'); await a.wait_for_timeout(800)
         await a.click('button:has-text("Settings")'); await a.wait_for_selector('text=Country, currency'); await a.screenshot(path='/tmp/dxb_settings.png')
         _, ck = http('POST','/api/login',{'pin':'9001'})

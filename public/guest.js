@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const { api, el, money, toast } = MOS;
-  const token = location.pathname.split('/')[2] || '';
+  const token = location.pathname.split('/t/')[1] || '';
   const base = `/api/guest/${encodeURIComponent(token)}`;
 
   // UI strings. Dari (fa) and Pashto (ps) need native-speaker review before live use.
@@ -243,7 +243,7 @@
       S.cart = S.cart.filter(l => { const it = itemById(l.itemId); return it && it.available; });
       render();
     } catch (e) {
-      app.replaceChildren(el('div', { class: 'banner bad' }, e.status === 403 ? t('invalid') : t('offline')));
+      app.replaceChildren(el('div', { class: 'banner bad' }, e.status === 403 ? t('invalid') : e.status === 423 || e.status === 404 ? e.message : t('offline')));
       renderLangs();
     }
   }

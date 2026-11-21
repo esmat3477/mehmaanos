@@ -1,10 +1,12 @@
 'use strict';
-// MehmaanOS pilot server. Zero runtime dependencies (Node >= 18).
+// MehmaanOS server: many restaurants on one platform. Node >= 18, one dependency (pg).
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { Store } = require('./lib/store');
+const { AsyncLocalStorage } = require('async_hooks');
+const { Platform } = require('./lib/store');
+const { seed } = require('./lib/seed');
 const { quote, canTransition, OrderError, ACTIVE } = require('./lib/orders');
 const auth = require('./lib/auth');
 
@@ -12,16 +14,31 @@ const PORT = Number(process.env.PORT || 3000);
 const { ALLERGENS } = require('./lib/seed');
 const { dailyReport } = require('./lib/report');
 const { LANGS, CURRENCIES, PRESETS, TAX_MODES } = require('./lib/locale');
-const store = new Store({ dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'), databaseUrl: process.env.DATABASE_URL });
-const D = () => store.data;
-let SECRET;
+const platform = new Platform({ dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'), databaseUrl: process.env.DATABASE_URL });
+
+// Every request for a restaurant runs inside its own context: { entry (registry row), doc (its data) }.
+// All data access below goes through D()/store, so code can only ever touch the current restaurant.
+const als = new AsyncLocalStorage();
+const T = () => { const c = als.getStore(); if (!c) throw new Error('no restaurant context'); return c; };
+const D = () => T().doc.data;
+const store = new Proxy({}, { get: (_, k) => { const d = T().doc; const v = d[k]; return typeof v === 'function' ? v.bind(d) : v; } });
+const hmacHex = (k, s) => crypto.createHmac('sha256', k).update(s).digest('hex');
+// Per-restaurant signing secret. A v0.x install keeps its APP_SECRET so printed QR codes stay valid.
+function secret() {
+  const { entry } = T();
+  if (process.env.APP_SECRET) return entry.legacy ? process.env.APP_SECRET : hmacHex(process.env.APP_SECRET, 'tenant:' + entry.id);
+  return D().secret;
+}
 
 // Login sources, in order: named staff accounts (Admin > Staff), then env PINs,
 // then built-in setup PINs 1111/2222/3333 ONLY while no env PINs and no admin account exist.
-const ENV_PINS = { admin: process.env.ADMIN_PIN, staff: process.env.STAFF_PIN, kitchen: process.env.KITCHEN_PIN };
+// Shared env PINs and setup PINs exist only for the upgraded v0.x restaurant ("main"). New restaurants get their owner account at signup.
+const ENV_PINS_RAW = { admin: process.env.ADMIN_PIN, staff: process.env.STAFF_PIN, kitchen: process.env.KITCHEN_PIN };
+const NO_PINS = { admin: undefined, staff: undefined, kitchen: undefined };
+const envPins = () => (T().entry.legacy ? ENV_PINS_RAW : NO_PINS);
 const SETUP_PINS = { admin: '1111', staff: '2222', kitchen: '3333' };
-const hasEnvPins = () => Object.values(ENV_PINS).some(Boolean);
-const setupMode = () => !hasEnvPins() && !D().users.some(u => u.active && u.role === 'admin');
+const hasEnvPins = () => Object.values(envPins()).some(Boolean);
+const setupMode = () => !!T().entry.legacy && !hasEnvPins() && !D().users.some(u => u.active && u.role === 'admin');
 
 // ---------- helpers ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
@@ -54,10 +71,10 @@ function cookies(req) {
 }
 // Returns { role, uid, name } for a valid session, or null. Deactivated users are rejected immediately.
 function who(req) {
-  const s = auth.verifySession(SECRET, cookies(req).mos);
+  const s = auth.verifySession(secret(), cookies(req).mos);
   if (!s) return null;
   if (s.uid === 'setup' && !setupMode()) return null; // setup PINs die as soon as a real admin exists
-  if (s.uid === 'env' && !ENV_PINS[s.role]) return null;
+  if (s.uid === 'env' && !envPins()[s.role]) return null;
   if (s.uid === 'env' || s.uid === 'setup') return { ...s, name: `${s.role} (${s.uid === 'env' ? 'shared PIN' : 'setup PIN'})` };
   const u = D().users.find(x => x.id === s.uid);
   if (!u || !u.active || u.role !== s.role) return null;
@@ -79,6 +96,7 @@ const now = () => new Date().toISOString();
 // Simple fixed-window rate limiter.
 const buckets = new Map();
 function limited(key, max, windowMs) {
+  key = (als.getStore()?.entry.id || '_') + ':' + key;
   const t = Date.now(); const b = buckets.get(key);
   if (!b || t - b.start > windowMs) { buckets.set(key, { start: t, n: 1 }); return false; }
   b.n++; return b.n > max;
@@ -86,12 +104,11 @@ function limited(key, max, windowMs) {
 setInterval(() => { const t = Date.now(); for (const [k, b] of buckets) if (t - b.start > 3600e3) buckets.delete(k); }, 600e3).unref();
 
 // ---------- realtime (SSE) ----------
-const clients = new Set();
 function broadcast(type, payload) {
   const msg = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
-  for (const c of clients) c.write(msg);
+  for (const c of T().doc.clients) c.write(msg);
 }
-setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 25e3).unref();
+setInterval(() => { for (const d of platform.tenants.values()) for (const c of d.clients) c.write(': ping\n\n'); }, 25e3).unref();
 
 // ---------- views ----------
 function publicOrder(o) {
@@ -109,12 +126,19 @@ function staffState() {
   const d = D();
   const since = Date.now() - 12 * 3600e3;
   return {
-    restaurant: d.restaurant, settings: d.settings, defaultPins: setupMode(),
+    restaurant: d.restaurant, settings: d.settings, defaultPins: setupMode(), account: accountInfo(),
     tables: d.tables.map(t => ({ id: t.id, label: t.label })),
     orders: d.orders.filter(o => ACTIVE.includes(o.status) || Date.parse(o.createdAt) > since).map(publicOrder),
     requests: d.requests.filter(r => r.status !== 'closed' || Date.parse(r.createdAt) > since)
   };
 }
+
+function accountInfo() {
+  const e = T().entry;
+  const trialLeft = e.trialEndsAt ? Math.ceil((Date.parse(e.trialEndsAt) - Date.now()) / 864e5) : null;
+  return { slug: e.slug, status: e.status, plan: e.plan, trialEndsAt: e.trialEndsAt || null, trialDaysLeft: trialLeft, paidUntil: e.paidUntil || null };
+}
+const isSuspended = () => T().entry.status === 'suspended';
 
 // ---------- order actions ----------
 function createOrder(table, body) {
@@ -155,18 +179,10 @@ function transition(orderId, to, actor, reason) {
 }
 
 // ---------- router ----------
-async function handle(req, res) {
-  const url = new URL(req.url, 'http://x');
-  const p = url.pathname;
+// Requests under /r/<slug>/... ; p is the path inside the restaurant.
+async function tenantHandle(req, res, url, p) {
   const M = req.method;
-
-  // security headers on everything
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'");
-
-  if (p === '/healthz') return send(res, store.lastError ? 503 : 200, { ok: !store.lastError, storage: store.driver.name, lastSavedAt: store.lastSavedAt, error: store.lastError || undefined });
+  const slug = T().entry.slug;
 
   // ----- pages -----
   const pages = { '/': 'index.html', '/kitchen': 'kitchen.html', '/staff': 'staff.html', '/admin': 'admin.html', '/login': 'login.html', '/guide': 'guide.html' };
@@ -178,7 +194,8 @@ async function handle(req, res) {
     // ----- guest API -----
     const g = p.match(/^\/api\/guest\/([^/]+)(\/.*)?$/);
     if (g) {
-      const table = auth.verifyTableToken(SECRET, D().tables, g[1]);
+      if (isSuspended()) throw new OrderError('SUSPENDED', 'This restaurant is not taking online orders right now. Please order with a waiter.', 423);
+      const table = auth.verifyTableToken(secret(), D().tables, g[1]);
       if (!table) throw new OrderError('BAD_TABLE', 'This table code is not valid. Please ask a waiter.', 403);
       const sub = g[2] || '';
       if (M === 'GET' && sub === '/menu') return send(res, 200, { table: { id: table.id, label: table.label }, ...guestMenu() });
@@ -216,6 +233,7 @@ async function handle(req, res) {
 
     // ----- auth -----
     if (M === 'POST' && p === '/api/login') {
+      if (isSuspended()) throw new OrderError('SUSPENDED', 'This restaurant account is suspended. Please contact MehmaanOS support.', 423);
       if (limited('login:' + ip(req), 8, 5 * 60e3)) throw new OrderError('RATE', 'Too many attempts. Try again in a few minutes.', 429);
       const { pin } = await readBody(req);
       const pinStr = String(pin || '');
@@ -224,14 +242,14 @@ async function handle(req, res) {
       for (const u of D().users.filter(u => u.active).sort((a, b) => rank[a.role] - rank[b.role])) {
         if (auth.checkPin(pinStr, u.pinHash)) { found = { role: u.role, uid: u.id, name: u.name }; break; }
       }
-      if (!found) for (const r of ['admin', 'staff', 'kitchen']) if (ENV_PINS[r] && auth.safeEq(ENV_PINS[r], pinStr)) { found = { role: r, uid: 'env', name: `${r} (shared PIN)` }; break; }
+      if (!found) for (const r of ['admin', 'staff', 'kitchen']) if (envPins()[r] && auth.safeEq(envPins()[r], pinStr)) { found = { role: r, uid: 'env', name: `${r} (shared PIN)` }; break; }
       if (!found && setupMode()) for (const r of ['admin', 'staff', 'kitchen']) if (auth.safeEq(SETUP_PINS[r], pinStr)) { found = { role: r, uid: 'setup', name: `${r} (setup PIN)` }; break; }
       if (!found) { store.audit('anon', 'login.fail', { ip: ip(req) }); store.save(); throw new OrderError('BAD_PIN', 'Wrong PIN', 401); }
       store.audit(found.name, 'login', { ip: ip(req), role: found.role }); store.save();
       const secure = baseUrl(req).startsWith('https') ? '; Secure' : '';
-      return send(res, 200, { role: found.role, name: found.name }, { 'Set-Cookie': `mos=${auth.sessionCookie(SECRET, found.role, found.uid)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=50400${secure}` });
+      return send(res, 200, { role: found.role, name: found.name }, { 'Set-Cookie': `mos=${auth.sessionCookie(secret(), found.role, found.uid)}; HttpOnly; SameSite=Strict; Path=/r/${slug}; Max-Age=50400${secure}` });
     }
-    if (M === 'POST' && p === '/api/logout') return send(res, 200, { ok: true }, { 'Set-Cookie': 'mos=; Path=/; Max-Age=0' });
+    if (M === 'POST' && p === '/api/logout') return send(res, 200, { ok: true }, { 'Set-Cookie': `mos=; Path=/r/${slug}; Max-Age=0` });
     if (M === 'GET' && p === '/api/me') { const w = who(req); return send(res, 200, { role: w?.role || null, name: w?.name || null }); }
 
     // ----- staff / kitchen -----
@@ -239,7 +257,7 @@ async function handle(req, res) {
       need(req, ['kitchen', 'staff', 'admin']);
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
       res.write('retry: 3000\n\n');
-      clients.add(res); req.on('close', () => clients.delete(res));
+      const set = T().doc.clients; set.add(res); req.on('close', () => set.delete(res));
       return;
     }
     if (M === 'GET' && p === '/api/state') { need(req, ['kitchen', 'staff', 'admin']); return send(res, 200, staffState()); }
@@ -321,7 +339,7 @@ async function handle(req, res) {
       }
       if (M === 'GET' && p === '/api/admin/tables') {
         const base = baseUrl(req);
-        return send(res, 200, { tables: d.tables.map(t => ({ ...t, url: `${base}/t/${auth.tableToken(SECRET, t)}` })) });
+        return send(res, 200, { tables: d.tables.map(t => ({ ...t, url: `${base}/r/${slug}/t/${auth.tableToken(secret(), t)}` })) });
       }
       if (M === 'POST' && p === '/api/admin/tables') {
         const { label } = await readBody(req);
@@ -345,7 +363,7 @@ async function handle(req, res) {
         if (required && !out.en) throw new OrderError('BAD_NAME', 'English name is required');
         return out;
       };
-      const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+      const slugOf = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
       const bump = () => { d.menu.version++; d.menu.publishedAt = now(); };
       if (M === 'POST' && p === '/api/admin/items') {
         const b = await readBody(req);
@@ -365,7 +383,7 @@ async function handle(req, res) {
           if ([...it.allergens].sort().join() !== [...allergens].sort().join()) d.menu.allergenReview = null;
           Object.assign(it, fields);
         } else {
-          let id = slug(fields.name.en) || 'item'; while (d.menu.items.some(i => i.id === id)) id += '-2';
+          let id = slugOf(fields.name.en) || 'item'; while (d.menu.items.some(i => i.id === id)) id += '-2';
           it = { id, available: true, ...fields };
           d.menu.items.push(it);
           if (allergens.length) d.menu.allergenReview = null;
@@ -388,7 +406,7 @@ async function handle(req, res) {
         const name = txt(b.name, 40, true);
         let c = b.id ? d.menu.categories.find(x => x.id === b.id) : null;
         if (c) c.name = name;
-        else { let id = slug(name.en) || 'cat'; while (d.menu.categories.some(x => x.id === id)) id += '-2'; c = { id, name }; d.menu.categories.push(c); }
+        else { let id = slugOf(name.en) || 'cat'; while (d.menu.categories.some(x => x.id === id)) id += '-2'; c = { id, name }; d.menu.categories.push(c); }
         if (Number.isInteger(b.move) && b.move) {
           const i = d.menu.categories.indexOf(c), j = Math.max(0, Math.min(d.menu.categories.length - 1, i + b.move));
           d.menu.categories.splice(i, 1); d.menu.categories.splice(j, 0, c);
@@ -406,7 +424,7 @@ async function handle(req, res) {
 
       // ----- staff accounts -----
       if (M === 'GET' && p === '/api/admin/users') {
-        return send(res, 200, { users: d.users.map(({ pinHash, ...u }) => u), envPins: Object.fromEntries(Object.entries(ENV_PINS).map(([k, v]) => [k, !!v])), setupMode: setupMode() });
+        return send(res, 200, { users: d.users.map(({ pinHash, ...u }) => u), envPins: Object.fromEntries(Object.entries(envPins()).map(([k, v]) => [k, !!v])), setupMode: setupMode() });
       }
       if (M === 'POST' && p === '/api/admin/users') {
         const b = await readBody(req);
@@ -414,7 +432,7 @@ async function handle(req, res) {
         if (!name) throw new OrderError('BAD_NAME', 'Name is required');
         if (!auth.ROLES.includes(b.role)) throw new OrderError('BAD_ROLE', 'Choose a role');
         if (!auth.validPin(b.pin)) throw new OrderError('BAD_PIN', 'PIN must be 4 to 8 digits');
-        if (d.users.some(u => u.active && auth.checkPin(b.pin, u.pinHash)) || Object.values(ENV_PINS).includes(String(b.pin))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
+        if (d.users.some(u => u.active && auth.checkPin(b.pin, u.pinHash)) || Object.values(envPins()).includes(String(b.pin))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
         d.counters.user = (d.counters.user || 0) + 1;
         const u = { id: 'u' + d.counters.user, name, role: b.role, active: true, createdAt: now(), pinHash: auth.hashPin(b.pin) };
         d.users.push(u);
@@ -455,7 +473,7 @@ async function handle(req, res) {
         return send(res, 200, JSON.stringify(doc), { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="mehmaanos-backup-${now().slice(0, 10)}.json"` });
       }
       if (M === 'GET' && p === '/api/admin/system') {
-        return send(res, 200, { storage: store.driver.name, lastSavedAt: store.lastSavedAt, error: store.lastError, backups: await store.driver.listBackups(), node: process.version, uptimeSec: Math.round(process.uptime()) });
+        return send(res, 200, { storage: platform.driver.name, lastSavedAt: store.lastSavedAt, error: store.lastError, backups: await store.listBackups(), node: process.version, uptimeSec: Math.round(process.uptime()) });
       }
 
       if (M === 'GET' && p === '/api/admin/audit') return send(res, 200, { audit: d.audit.slice(-300).reverse() });
@@ -471,34 +489,207 @@ async function handle(req, res) {
   } catch (e) { err(res, e); }
 }
 
-function serveFile(res, rel) {
+function serveFile(res, rel, status = 200) {
   const file = path.normalize(path.join(PUB, rel));
   if (!file.startsWith(PUB)) return send(res, 404, 'Not found');
   fs.readFile(file, (e, buf) => {
     if (e) return send(res, 404, 'Not found');
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': rel.endsWith('.html') ? 'no-store' : 'public, max-age=300' });
+    res.writeHead(status, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': rel.endsWith('.html') ? 'no-store' : 'public, max-age=300' });
     res.end(buf);
   });
+}
+
+
+// =====================================================================
+// Platform: landing, signup, routing to restaurants, owner console
+// =====================================================================
+const RESERVED = new Set(['api', 'static', 'platform', 'signup', 'admin', 'www', 'app', 'r', 't', 'login', 'staff', 'kitchen', 'guide', 'healthz', 'help', 'support', 'mehmaanos', 'aria', 'test', 'demo-admin']);
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS || 60);
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/;
+const platformSecret = () => process.env.APP_SECRET ? hmacHex(process.env.APP_SECRET, 'platform') : platform.registry.data.secret;
+
+function security(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'");
+}
+const redirect = (res, to) => { res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' }); res.end(); };
+
+async function handle(req, res) {
+  security(res);
+  const url = new URL(req.url, 'http://x');
+  const p = url.pathname, M = req.method;
+
+  if (p === '/healthz') {
+    const e = platform.registry.lastError;
+    return send(res, e ? 503 : 200, { ok: !e, storage: platform.driver.name, restaurants: platform.list().length, error: e || undefined });
+  }
+  if (M === 'GET' && p.startsWith('/static/')) return serveFile(res, p.slice(8));
+
+  // ----- a restaurant -----
+  const m = p.match(/^\/r\/([a-z0-9-]{2,40})(\/.*)?$/);
+  if (m) {
+    const entry = platform.find(m[1]);
+    if (!entry) return (m[2] || '').startsWith('/api') ? send(res, 404, { error: 'NO_RESTAURANT', message: 'Restaurant not found' }) : serveFile(res, 'notfound.html', 404);
+    if (!m[2]) return redirect(res, `/r/${entry.slug}/`);
+    const doc = await platform.open(entry);
+    if (!doc.data.secret) { doc.data.secret = crypto.randomBytes(32).toString('hex'); await doc.flush(); }
+    return als.run({ entry, doc }, () => tenantHandle(req, res, url, m[2]));
+  }
+
+  // ----- v0.x single-restaurant links (printed QR codes, bookmarks) -----
+  const legacy = platform.list().find(t => t.legacy);
+  if (legacy && M === 'GET' && (/^\/(staff|kitchen|admin|login|guide)$/.test(p) || p.startsWith('/t/'))) return redirect(res, `/r/${legacy.slug}${p}${url.search}`);
+
+  // ----- platform pages -----
+  const pages = { '/': 'landing.html', '/signup': 'signup.html', '/platform': 'platform.html' };
+  if (M === 'GET' && pages[p]) return serveFile(res, pages[p]);
+
+  try {
+    if (M === 'GET' && p === '/api/signup/check') {
+      const slug = String(url.searchParams.get('slug') || '').toLowerCase();
+      const ok = SLUG_RE.test(slug) && !RESERVED.has(slug) && !platform.find(slug);
+      return send(res, 200, { slug, available: ok, inviteRequired: !!process.env.SIGNUP_CODE });
+    }
+    if (M === 'POST' && p === '/api/signup') return await signup(req, res);
+    if (p.startsWith('/api/platform/')) return await platformApi(req, res, url, p);
+    throw new OrderError('NOT_FOUND', 'Not found', 404);
+  } catch (e) { err(res, e); }
+}
+
+async function signup(req, res) {
+  if (process.env.SIGNUP_DISABLED === '1') throw new OrderError('CLOSED', 'New sign-ups are closed right now.', 403);
+  if (limited('signup:' + ip(req), Number(process.env.SIGNUP_LIMIT || 5), 3600e3)) throw new OrderError('RATE', 'Too many sign-ups from this network. Try again later.', 429);
+  const b = await readBody(req);
+  if (process.env.SIGNUP_CODE && !auth.safeEq(process.env.SIGNUP_CODE, String(b.code || ''))) throw new OrderError('BAD_CODE', 'The invite code is not valid.', 403);
+  const name = String(b.restaurantName || '').trim().slice(0, 80);
+  const owner = String(b.ownerName || '').trim().slice(0, 40);
+  const contact = String(b.contact || '').trim().slice(0, 120);
+  const slug = String(b.slug || '').trim().toLowerCase();
+  if (!name) throw new OrderError('BAD_NAME', 'Restaurant name is required');
+  if (!owner) throw new OrderError('BAD_NAME', 'Your name is required');
+  if (contact.length < 5) throw new OrderError('BAD_CONTACT', 'Email or phone is required so we can reach you');
+  if (!SLUG_RE.test(slug) || RESERVED.has(slug)) throw new OrderError('BAD_SLUG', 'Web address: 3–40 lowercase letters, numbers or dashes');
+  if (platform.find(slug)) throw new OrderError('SLUG_TAKEN', 'That web address is taken. Try another.', 409);
+  if (!auth.validPin(b.pin)) throw new OrderError('BAD_PIN', 'PIN must be 4 to 8 digits');
+  if (b.terms !== true) throw new OrderError('TERMS', 'Please accept the terms to continue');
+
+  const data = seed();
+  data.secret = crypto.randomBytes(32).toString('hex');
+  data.restaurant.name = name;
+  if (PRESETS[b.country]) Object.assign(data.restaurant, JSON.parse(JSON.stringify(PRESETS[b.country])), { defaultLang: 'en' });
+  data.restaurant.demo = !!b.demoMenu;
+  if (!b.demoMenu) data.menu.items = [];
+  // The sample menu is priced in afghani; give 2-decimal currencies sensible round sample prices (~20 AFN = 1 unit).
+  else if ((CURRENCIES[data.restaurant.currency] ?? 0) === 2) for (const it of data.menu.items) it.price = Math.max(1, Math.round(it.price / 20)) * 100;
+  data.users = [{ id: 'u1', name: owner, role: 'admin', active: true, createdAt: now(), pinHash: auth.hashPin(b.pin) }];
+  data.counters.user = 1;
+  data.audit = [{ at: now(), actor: owner, action: 'restaurant.signup', detail: { slug, country: b.country || 'custom' } }];
+  const entry = {
+    id: 't_' + crypto.randomBytes(6).toString('hex'), slug, name, status: 'trial', plan: 'trial',
+    createdAt: now(), trialEndsAt: new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString(),
+    owner, contact, country: PRESETS[b.country] ? b.country : 'custom'
+  };
+  try { await platform.create(entry, data); } catch (e) { if (/slug taken/.test(e.message)) throw new OrderError('SLUG_TAKEN', 'That web address is taken. Try another.', 409); throw e; }
+  console.log(`signup: ${slug} (${name})`);
+  const doc = platform.tenants.get(entry.id);
+  const cookie = als.run({ entry, doc }, () => auth.sessionCookie(secret(), 'admin', 'u1'));
+  const secure = baseUrl(req).startsWith('https') ? '; Secure' : '';
+  return send(res, 201, { slug, url: `/r/${slug}/admin` }, { 'Set-Cookie': `mos=${cookie}; HttpOnly; SameSite=Strict; Path=/r/${slug}; Max-Age=50400${secure}` });
+}
+
+// ----- owner console (you / Aria). Enabled only when PLATFORM_PIN is set. -----
+function platformAuth(req) {
+  const v = cookies(req).mosp || '';
+  const [exp, sig] = v.split('.');
+  return exp && Number(exp) > Date.now() && auth.safeEq(hmacHex(platformSecret(), 'plat:' + exp).slice(0, 32), sig || '');
+}
+async function tenantStats(entry) {
+  const d = (await platform.open(entry)).data;
+  const since = Date.now() - 30 * 864e5;
+  const recent = d.orders.filter(o => Date.parse(o.createdAt) > since);
+  const last = d.orders[d.orders.length - 1];
+  return {
+    ...entry, currency: d.restaurant.currency,
+    ordersTotal: d.orders.length, orders30d: recent.length,
+    value30d: recent.filter(o => !['Rejected', 'Canceled'].includes(o.status)).reduce((a, o) => a + o.total, 0),
+    lastOrderAt: last ? last.createdAt : null, staff: d.users.filter(u => u.active).length, tables: d.tables.length, dishes: d.menu.items.length
+  };
+}
+async function platformApi(req, res, url, p) {
+  const M = req.method;
+  if (!process.env.PLATFORM_PIN) throw new OrderError('DISABLED', 'Owner console is disabled. Set PLATFORM_PIN on the server to enable it.', 404);
+  if (M === 'POST' && p === '/api/platform/login') {
+    if (limited('plogin:' + ip(req), 5, 15 * 60e3)) throw new OrderError('RATE', 'Too many attempts. Try again later.', 429);
+    const { pin } = await readBody(req);
+    if (!auth.safeEq(process.env.PLATFORM_PIN, String(pin || ''))) throw new OrderError('BAD_PIN', 'Wrong PIN', 401);
+    const exp = Date.now() + 8 * 3600e3;
+    const secure = baseUrl(req).startsWith('https') ? '; Secure' : '';
+    return send(res, 200, { ok: true }, { 'Set-Cookie': `mosp=${exp}.${hmacHex(platformSecret(), 'plat:' + exp).slice(0, 32)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${secure}` });
+  }
+  if (M === 'POST' && p === '/api/platform/logout') return send(res, 200, { ok: true }, { 'Set-Cookie': 'mosp=; Path=/; Max-Age=0' });
+  if (!platformAuth(req)) throw new OrderError('UNAUTHORIZED', 'Please sign in', 401);
+
+  if (M === 'GET' && p === '/api/platform/tenants') {
+    const list = [];
+    for (const e of platform.list()) list.push(await tenantStats(e));
+    return send(res, 200, { tenants: list, trialDays: TRIAL_DAYS, signup: { inviteRequired: !!process.env.SIGNUP_CODE, disabled: process.env.SIGNUP_DISABLED === '1' } });
+  }
+  const tm = p.match(/^\/api\/platform\/tenants\/([\w-]+)(?:\/(export|delete))?$/);
+  if (tm) {
+    const entry = platform.list().find(t => t.id === tm[1]);
+    if (!entry) throw new OrderError('NOT_FOUND', 'Restaurant not found', 404);
+    if (M === 'GET' && tm[2] === 'export') {
+      const { secret: _s, ...doc } = (await platform.open(entry)).data;
+      doc.users = doc.users.map(({ pinHash, ...u }) => u);
+      return send(res, 200, JSON.stringify({ restaurant: entry, data: doc }), { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="mehmaanos-${entry.slug}-${now().slice(0, 10)}.json"` });
+    }
+    if (M === 'POST' && tm[2] === 'delete') {
+      const { confirm } = await readBody(req);
+      if (confirm !== entry.slug) throw new OrderError('CONFIRM', `Type the web address "${entry.slug}" to confirm`, 400);
+      await platform.remove(entry);
+      console.log(`deleted restaurant ${entry.slug}`);
+      return send(res, 200, { ok: true });
+    }
+    if (M === 'POST' && !tm[2]) {
+      const b = await readBody(req);
+      if (b.status !== undefined) { if (!['trial', 'active', 'suspended'].includes(b.status)) throw new OrderError('BAD_STATUS', 'Unknown status'); entry.status = b.status; }
+      if (b.plan !== undefined) entry.plan = String(b.plan).slice(0, 30);
+      if (b.extendTrialDays) { const base = Math.max(Date.now(), Date.parse(entry.trialEndsAt || 0)); entry.trialEndsAt = new Date(base + Number(b.extendTrialDays) * 864e5).toISOString(); }
+      if (b.paidUntil !== undefined) entry.paidUntil = b.paidUntil ? new Date(b.paidUntil).toISOString() : null;
+      if (b.note !== undefined) entry.note = String(b.note).slice(0, 300);
+      await platform.registry.save();
+      if (b.status === 'suspended') for (const c of platform.tenants.get(entry.id)?.clients || []) c.end();
+      return send(res, 200, { tenant: entry });
+    }
+  }
+  throw new OrderError('NOT_FOUND', 'Not found', 404);
 }
 
 const server = http.createServer((req, res) => { handle(req, res).catch(e => err(res, e)); });
 
 async function start() {
-  await store.init();
-  if (!D().secret) { D().secret = crypto.randomBytes(32).toString('hex'); await store.flush(); }
-  SECRET = process.env.APP_SECRET || D().secret;
-  // Escalate guest requests nobody has claimed for 2 minutes (re-announced to all staff screens).
+  await platform.init();
+  if (!platform.registry.data.secret) { platform.registry.data.secret = crypto.randomBytes(32).toString('hex'); await platform.registry.flush(); }
+  // Escalate guest requests nobody has claimed for 2 minutes, in every open restaurant.
   setInterval(() => {
     const cutoff = Date.now() - 120e3;
-    for (const r of D().requests) if (r.status === 'open' && !r.escalated && Date.parse(r.createdAt) < cutoff) {
-      r.escalated = true; store.audit('system', 'request.escalate', { no: r.no, table: r.tableId }); store.save(); broadcast('request', r);
+    for (const [id, doc] of platform.tenants) {
+      const entry = platform.list().find(e => e.id === id);
+      if (!entry) continue;
+      als.run({ entry, doc }, () => {
+        for (const r of D().requests) if (r.status === 'open' && !r.escalated && Date.parse(r.createdAt) < cutoff) {
+          r.escalated = true; store.audit('system', 'request.escalate', { no: r.no, table: r.tableId }); store.save(); broadcast('request', r);
+        }
+      });
     }
   }, 15e3).unref();
   await new Promise(r => server.listen(PORT, r));
-  console.log(`MehmaanOS listening on :${PORT} · storage=${store.driver.name}${setupMode() ? ' · SETUP MODE: setup PINs 1111/2222/3333 active until an admin account or env PINs exist' : ''}`);
+  console.log(`MehmaanOS listening on :${PORT} · storage=${platform.driver.name} · restaurants=${platform.list().length}${process.env.PLATFORM_PIN ? ' · owner console on' : ''}${process.env.SIGNUP_CODE ? ' · invite-only signup' : ''}`);
 }
-const shutdown = async () => { server.close(); await store.close(); process.exit(0); };
+const shutdown = async () => { server.close(); await platform.close(); process.exit(0); };
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 if (require.main === module) start().catch(e => { console.error('Failed to start', e); process.exit(1); });
 
-module.exports = { server, start, store };
+module.exports = { server, start, platform };

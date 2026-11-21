@@ -5,24 +5,40 @@ const assert = require('node:assert');
 const os = require('os'); const fs = require('fs'); const path = require('path');
 const { spawn } = require('child_process');
 
-let proc, base;
-async function boot(env) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-'));
+let proc, root, base;
+async function boot(env, dir) {
+  dir = dir || fs.mkdtempSync(path.join(os.tmpdir(), 'mos-'));
   const port = 40000 + Math.floor(Math.random() * 10000);
   const b = `http://127.0.0.1:${port}`;
-  const p = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { PATH: process.env.PATH, PORT: port, DATA_DIR: dir, ...env }, stdio: 'ignore' });
+  const p = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { PATH: process.env.PATH, PORT: port, DATA_DIR: dir, SIGNUP_LIMIT: '100', ...env }, stdio: 'ignore' });
   for (let i = 0; i < 80; i++) { try { await fetch(b + '/healthz'); return { p, b }; } catch { await new Promise(r => setTimeout(r, 100)); } }
   throw new Error('server did not start');
 }
-test.before(async () => { ({ p: proc, b: base } = await boot({ ADMIN_PIN: '9001', STAFF_PIN: '9002', KITCHEN_PIN: '9003' })); });
-test.after(() => proc.kill());
-
+// raw request against the platform root
+const raw = async (method, url, body, cookie, host = root) => {
+  const r = await fetch(host + url, { method, redirect: 'manual', headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  return { status: r.status, location: r.headers.get('location'), body: r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text(), cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
+};
+async function signup(slug, pin, extra = {}) {
+  const r = await raw('POST', '/api/signup', { restaurantName: 'Test ' + slug, slug, country: 'AF', ownerName: 'Owner ' + slug, contact: 'owner@example.com', pin, demoMenu: true, terms: true, ...extra });
+  return r;
+}
 let ADMIN;
-const adminLogin = async () => ADMIN || (ADMIN = (await j('POST', '/api/login', { pin: '9001' })).cookie);
+const adminLogin = async () => ADMIN;
 const j = async (method, url, body, cookie) => {
   const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text(), cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
 };
+test.before(async () => {
+  ({ p: proc, b: root } = await boot({ PLATFORM_PIN: '777777' }));
+  const s = await signup('test-resto', '9001');
+  assert.strictEqual(s.status, 201, JSON.stringify(s.body));
+  base = `${root}/r/test-resto`;
+  ADMIN = s.cookie;
+  await j('POST', '/api/admin/users', { name: 'Waiter One', role: 'staff', pin: '9002' }, ADMIN);
+  await j('POST', '/api/admin/users', { name: 'Cook One', role: 'kitchen', pin: '9003' }, ADMIN);
+});
+test.after(() => proc.kill());
 
 test('full flow: QR order -> approval -> kitchen -> served, with idempotency and auth', async () => {
   assert.strictEqual((await j('POST', '/api/login', { pin: '0000' })).status, 401);
@@ -112,23 +128,88 @@ test('report and health endpoints', async () => {
   const r = await j('GET', `/api/admin/report?date=${new Date().toISOString().slice(0, 10)}&tz=0`, null, admin);
   assert.strictEqual(r.status, 200);
   assert.ok(r.body.orders.total >= 2);
-  const h = await j('GET', '/healthz');
+  const h = await raw('GET', '/healthz');
   assert.strictEqual(h.body.ok, true);
   const b = await j('GET', '/api/admin/backup.json', null, admin);
   assert.ok(!('secret' in (typeof b.body === 'string' ? JSON.parse(b.body) : b.body)), 'backup never contains the signing secret');
 });
 
-test('setup PINs work only until a real admin exists', async () => {
-  const { p, b } = await boot({});
+test('upgrade from single-restaurant install: becomes /r/main, old links redirect, setup PINs until a manager exists', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-legacy-'));
+  const old = require('../lib/seed').seed(); old.schema = 2; old.secret = 'legacysecret'; old.restaurant = { name: 'Old Place', currency: 'AFN', demo: true };
+  fs.writeFileSync(path.join(dir, 'mehmaanos.json'), JSON.stringify(old));
+  const { p, b } = await boot({}, dir);
   try {
-    const jj = async (m, u, body, cookie) => { const r = await fetch(b + u, { method: m, headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, cookie: (r.headers.get('set-cookie') || '').split(';')[0] }; };
-    const setup = await jj('POST', '/api/login', { pin: '1111' });
+    const qr = require('../lib/auth').tableToken('legacysecret', old.tables[0]);
+    const red = await raw('GET', `/t/${qr}`, null, null, b);
+    assert.strictEqual(red.status, 302); assert.strictEqual(red.location, `/r/main/t/${qr}`);
+    const menu = await raw('GET', `/r/main/api/guest/${qr}/menu`, null, null, b);
+    assert.strictEqual(menu.status, 200, 'printed QR codes from the old install still work');
+    assert.strictEqual(menu.body.restaurant.name, 'Old Place');
+    const setup = await raw('POST', '/r/main/api/login', { pin: '1111' }, null, b);
     assert.strictEqual(setup.status, 200);
-    assert.strictEqual((await jj('POST', '/api/admin/users', { name: 'Owner', role: 'admin', pin: '7391' }, setup.cookie)).status, 201);
-    assert.strictEqual((await jj('POST', '/api/login', { pin: '1111' })).status, 401, 'setup PIN disabled');
-    assert.strictEqual((await jj('GET', '/api/state', null, setup.cookie)).status, 401, 'old setup session revoked');
-    assert.strictEqual((await jj('POST', '/api/login', { pin: '7391' })).status, 200);
+    assert.strictEqual((await raw('POST', '/r/main/api/admin/users', { name: 'Owner', role: 'admin', pin: '7391' }, setup.cookie, b)).status, 201);
+    assert.strictEqual((await raw('POST', '/r/main/api/login', { pin: '1111' }, null, b)).status, 401, 'setup PIN disabled');
+    assert.strictEqual((await raw('GET', '/r/main/api/state', null, setup.cookie, b)).status, 401, 'old setup session revoked');
   } finally { p.kill(); }
+});
+
+test('isolation: one restaurant can never see or change another', async () => {
+  const s = await signup('other-place', '5150');
+  assert.strictEqual(s.status, 201);
+  const B = s.cookie;
+  const rawB = (m, u, body, c) => raw(m, '/r/other-place' + u, body, c);
+  // B's session is useless at A, and A's at B
+  assert.strictEqual((await j('GET', '/api/state', null, B)).status, 401);
+  assert.strictEqual((await rawB('GET', '/api/state', null, ADMIN)).status, 401);
+  // A's PIN does not log in at B
+  assert.strictEqual((await rawB('POST', '/api/login', { pin: '9001' })).status, 401);
+  // A's table QR token is rejected at B (signed with a different secret)
+  const { body: { tables } } = await j('GET', '/api/admin/tables', null, ADMIN);
+  const tokA = tables[0].url.split('/t/')[1];
+  assert.strictEqual((await rawB('GET', `/api/guest/${tokA}/menu`)).status, 403);
+  // B sees none of A's orders, users or audit
+  const stB = (await rawB('GET', '/api/state', null, B)).body;
+  assert.strictEqual(stB.orders.length, 0);
+  const usersB = (await rawB('GET', '/api/admin/users', null, B)).body.users;
+  assert.deepStrictEqual(usersB.map(u => u.name), ['Owner other-place']);
+  // A's order ids cannot be moved by B
+  const anyA = (await j('GET', '/api/state', null, ADMIN)).body.orders[0];
+  if (anyA) assert.strictEqual((await rawB('POST', `/api/orders/${anyA.id}/status`, { to: 'Canceled' }, B)).status, 404);
+  // Cookies are scoped to each restaurant's path
+  assert.match((await rawB('POST', '/api/login', { pin: '5150' })).cookie, /^mos=/);
+});
+
+test('signup rules: unique and valid web address, PIN, terms', async () => {
+  assert.strictEqual((await signup('test-resto', '1234')).status, 409, 'taken');
+  assert.strictEqual((await signup('api', '1234')).status, 400, 'reserved');
+  assert.strictEqual((await signup('Bad Slug!', '1234')).status, 400);
+  assert.strictEqual((await signup('fine-slug', '12')).status, 400, 'short PIN');
+  assert.strictEqual((await signup('fine-slug', '1234', { terms: false })).status, 400);
+  const chk = await raw('GET', '/api/signup/check?slug=test-resto');
+  assert.strictEqual(chk.body.available, false);
+  const ae = await signup('dubai-demo', '2468', { country: 'AE' });
+  const st = (await raw('GET', '/r/dubai-demo/api/admin/menu', null, ae.cookie)).body;
+  assert.strictEqual(st.items.find(i => i.id === 'kabuli').price, 1800, 'sample menu gets AED prices (AED 18.00)');
+});
+
+test('owner console: list, suspend locks guests and staff, reactivate, delete', async () => {
+  assert.strictEqual((await raw('GET', '/api/platform/tenants')).status, 401);
+  assert.strictEqual((await raw('POST', '/api/platform/login', { pin: '000000' })).status, 401);
+  const P = (await raw('POST', '/api/platform/login', { pin: '777777' })).cookie;
+  const list = (await raw('GET', '/api/platform/tenants', null, P)).body.tenants;
+  const other = list.find(t => t.slug === 'other-place');
+  assert.ok(other && other.status === 'trial' && other.trialEndsAt);
+  assert.ok(!JSON.stringify(list).includes('pinHash') && !JSON.stringify(list).includes('secret'));
+  await raw('POST', `/api/platform/tenants/${other.id}`, { status: 'suspended' }, P);
+  assert.strictEqual((await raw('POST', '/r/other-place/api/login', { pin: '5150' })).status, 423);
+  await raw('POST', `/api/platform/tenants/${other.id}`, { status: 'active', paidUntil: '2027-01-31' }, P);
+  assert.strictEqual((await raw('POST', '/r/other-place/api/login', { pin: '5150' })).status, 200);
+  const exp = await raw('GET', `/api/platform/tenants/${other.id}/export`, null, P);
+  assert.ok(!/pinHash|"secret"/.test(typeof exp.body === 'string' ? exp.body : JSON.stringify(exp.body)), 'export holds no PIN hashes or secrets');
+  assert.strictEqual((await raw('POST', `/api/platform/tenants/${other.id}/delete`, { confirm: 'wrong' }, P)).status, 400);
+  assert.strictEqual((await raw('POST', `/api/platform/tenants/${other.id}/delete`, { confirm: 'other-place' }, P)).status, 200);
+  assert.strictEqual((await raw('GET', '/r/other-place/api/state')).status, 404);
 });
 
 test('Dubai setup: UAE preset gives AED, 5% VAT included, Arabic; orders carry VAT; old orders unchanged', async () => {

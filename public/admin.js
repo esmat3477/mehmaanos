@@ -5,7 +5,7 @@
   let R = null; // restaurant settings (currency, tax, languages)
   const extra = () => R.languages.filter(l => l !== 'en');
   const dirOf = l => RTL.includes(l) ? 'rtl' : 'ltr';
-  const others = o => extra().map(l => (o && o[l]) || '—').join(' · ');
+  const others = o => extra().map(l => o && o[l]).filter(Boolean).join(' · ');
   await requireRole(['admin']);
   document.getElementById('logout').onclick = logout;
   const app = document.getElementById('app');
@@ -141,7 +141,7 @@
     const stat = (label, val, sub) => el('div', { class: 'card' }, el('div', { class: 'small muted' }, label), el('div', { style: 'font-size:1.5rem;font-weight:800' }, val), sub ? el('div', { class: 'small muted' }, sub) : null);
     const T = r.timesSec;
     return el('div', {},
-      el('div', { class: 'row noprint', style: 'margin-bottom:10px' }, dateIn, el('button', { onclick: () => window.print() }, 'Print'), el('a', { href: '/api/admin/export.csv' }, el('button', {}, 'All orders CSV'))),
+      el('div', { class: 'row noprint', style: 'margin-bottom:10px' }, dateIn, el('button', { onclick: () => window.print() }, 'Print'), el('a', { href: MOS.base + '/api/admin/export.csv' }, el('button', {}, 'All orders CSV'))),
       el('h2', {}, `${r.restaurant} · ${r.date}`),
       el('div', { class: 'grid cols3' },
         stat('QR orders', r.orders.total, `${r.orders.stillOpen} still open`),
@@ -206,7 +206,7 @@
         el('div', { class: 'card' }, el('div', { class: 'small muted' }, 'Last saved'), el('b', {}, sys.lastSavedAt ? new Date(sys.lastSavedAt).toLocaleString() : '–'),
           sys.error ? el('div', { class: 'small', style: 'color:var(--bad)' }, 'Save error: ', sys.error) : null),
         el('div', { class: 'card' }, el('div', { class: 'small muted' }, 'Automatic backups (every 6 h, last 28 kept)'), el('b', {}, sys.backups.length),
-          el('div', {}, el('a', { href: '/api/admin/backup.json' }, el('button', { style: 'margin-top:6px' }, 'Download backup now'))))),
+          el('div', {}, el('a', { href: MOS.base + '/api/admin/backup.json' }, el('button', { style: 'margin-top:6px' }, 'Download backup now'))))),
       el('h2', {}, 'Audit log (latest 300)'),
       el('div', { class: 'card' }, el('table', { class: 'list' },
         el('tr', {}, el('th', {}, 'Time'), el('th', {}, 'Who'), el('th', {}, 'Action'), el('th', {}, 'Detail')),
@@ -214,13 +214,18 @@
   }
 
   async function draw() {
-    location.hash = tab;
+    if (location.hash !== '#welcome') history.replaceState(null, '', '#' + tab);
     const state = await api('GET', '/api/state');
     R = state.restaurant;
     const nav = el('div', { class: 'tabs noprint' }, ...TABS.map(([k, l]) => el('button', { class: tab === k ? 'on' : '', onclick: () => { tab = k; draw(); } }, l)));
     const views = { menu: menuTab, tables: tablesTab, staff: staffTab, report: reportTab, settings: settingsTab, system: systemTab };
     const body = await (views[tab] || menuTab)(state);
-    fill(app, state.defaultPins && tab !== 'staff' ? el('div', { class: 'banner bad noprint' }, 'Setup mode: built-in PINs are active. ', el('a', { href: '#staff', onclick: () => { tab = 'staff'; draw(); } }, 'Create your Manager account')) : null, nav, body);
+    const A = state.account || {};
+    const acct = A.status === 'suspended' ? el('div', { class: 'banner bad noprint' }, 'This restaurant is suspended. Guests cannot order. Contact MehmaanOS support.')
+      : A.status === 'trial' && A.trialDaysLeft != null ? el('div', { class: 'banner ' + (A.trialDaysLeft <= 7 ? 'bad' : 'ok') + ' noprint small' },
+        A.trialDaysLeft > 0 ? `Free trial: ${A.trialDaysLeft} day(s) left.` : 'Your free trial has ended. Contact MehmaanOS to continue.', ` Your address: ${location.host}/r/${A.slug}`) : null;
+    if (location.hash === '#welcome') { tab = 'menu'; history.replaceState(null, '', '#menu'); toast('Welcome! Next: check your menu, then add staff and print your QR codes.', 6000); }
+    fill(app, acct, state.defaultPins && tab !== 'staff' ? el('div', { class: 'banner bad noprint' }, 'Setup mode: built-in PINs are active. ', el('a', { href: '#staff', onclick: () => { tab = 'staff'; draw(); } }, 'Create your Manager account')) : null, nav, body);
   }
   draw().catch(e => toast(e.message));
 })();

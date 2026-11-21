@@ -5,23 +5,23 @@ import asyncio, json, os, signal, subprocess, sys, tempfile, time, urllib.reques
 from playwright.async_api import async_playwright
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT = 3997; B = f'http://127.0.0.1:{PORT}'
+PORT = 3997; SITE = f'http://127.0.0.1:{PORT}'; B = SITE + '/r/e2e'
 DATA = tempfile.mkdtemp(prefix='mos-e2e-')
-ENV = {**os.environ, 'PORT': str(PORT), 'DATA_DIR': DATA, 'ADMIN_PIN': '9001', 'STAFF_PIN': '9002', 'KITCHEN_PIN': '9003'}
+ENV = {**os.environ, 'PORT': str(PORT), 'DATA_DIR': DATA}
 results = []
 
 def start():
     p = subprocess.Popen(['node', 'server.js'], cwd=ROOT, env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(80):
-        try: urllib.request.urlopen(B + '/healthz'); return p
+        try: urllib.request.urlopen(SITE + '/healthz'); return p
         except Exception: time.sleep(0.1)
     raise RuntimeError('server did not start')
 
 def check(name, ok, info=''):
     results.append((name, bool(ok), info)); print(('PASS ' if ok else 'FAIL ') + name + (f'  ({info})' if info else ''))
 
-def http(method, path, body=None, cookie=None):
-    req = urllib.request.Request(B + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+def http(method, path, body=None, cookie=None, base=None):
+    req = urllib.request.Request((base or B) + path, method=method, data=json.dumps(body).encode() if body is not None else None,
                                  headers={'content-type': 'application/json', **({'cookie': cookie} if cookie else {})})
     with urllib.request.urlopen(req) as r:
         return json.loads(r.read() or b'{}'), (r.headers.get('set-cookie') or '').split(';')[0]
@@ -36,7 +36,8 @@ PHONES = {
 async def main():
     srv = start()
     try:
-        _, admin = http('POST', '/api/login', {'pin': '9001'})
+        _, admin = http('POST', '/api/signup', {'restaurantName': 'E2E Kabul', 'slug': 'e2e', 'country': 'AF', 'ownerName': 'Tester', 'contact': 't@example.com', 'pin': '9001', 'demoMenu': True, 'terms': True}, base=SITE)
+        http('POST', '/api/admin/users', {'name': 'Cook', 'role': 'kitchen', 'pin': '9003'}, admin)
         tables = http('GET', '/api/admin/tables', cookie=admin)[0]['tables']
         url = lambda i: tables[i]['url']
         orders_for = lambda tid: [o for o in http('GET', '/api/state', cookie=admin)[0]['orders'] if o['tableId'] == tid]

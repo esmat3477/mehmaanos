@@ -1,7 +1,10 @@
 'use strict';
 // Shared helpers for all MehmaanOS screens.
 window.MOS = (() => {
+  // Every restaurant lives under /r/<slug>/ ; all API calls and links are relative to it.
+  const BASE = (location.pathname.match(/^\/r\/[a-z0-9-]+/) || [''])[0];
   async function api(method, url, body) {
+    if (url.startsWith('/api')) url = BASE + url;
     const res = await fetch(url, {
       method, credentials: 'same-origin',
       headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -46,7 +49,7 @@ window.MOS = (() => {
   function live(onChange) {
     let es;
     const connect = () => {
-      es = new EventSource('/api/stream');
+      es = new EventSource(BASE + '/api/stream');
       es.onopen = () => onChange('resync');
       ['order', 'request', 'menu', 'settings'].forEach(t => es.addEventListener(t, ev => onChange(t, JSON.parse(ev.data))));
       es.onerror = () => { setStatus(false); };
@@ -61,14 +64,14 @@ window.MOS = (() => {
   }
   async function requireRole(roles) {
     const { role } = await api('GET', '/api/me');
-    if (!role || !roles.includes(role)) { location.href = '/login?next=' + encodeURIComponent(location.pathname); throw new Error('redirect'); }
+    if (!role || !roles.includes(role)) { location.href = BASE + '/login?next=' + encodeURIComponent(location.pathname.split('/').pop()); throw new Error('redirect'); }
     return role;
   }
-  async function logout() { await api('POST', '/api/logout'); location.href = '/login'; }
+  async function logout() { await api('POST', '/api/logout'); location.href = BASE + '/login'; }
   const STATUS = {
     PendingApproval: 'Awaiting staff', Accepted: 'Accepted', InPreparation: 'Preparing',
     Ready: 'Ready', Served: 'Served', Closed: 'Closed', Rejected: 'Rejected', Canceled: 'Canceled'
   };
   function fill(node, ...kids) { node.replaceChildren(...kids.flat().filter(k => k != null && k !== false)); }
-  return { fill, api, el, money, toMinor, toMajor, RTL, DEC, ago, toast, live, requireRole, logout, STATUS, setStatus };
+  return { base: BASE, fill, api, el, money, toMinor, toMajor, RTL, DEC, ago, toast, live, requireRole, logout, STATUS, setStatus };
 })();
