@@ -11,14 +11,14 @@ def http(m,p,body=None,c=None,base=None):
 async def main():
     async with async_playwright() as p:
         b=await p.chromium.launch(); errs=[]
-        http('POST','/api/signup',{'restaurantName':'Kabul Darbar Dubai','slug':'dubai','country':'AF','ownerName':'Owner','contact':'o@example.com','pin':'9001','demoMenu':True,'terms':True},base=ROOT)
+        http('POST','/api/signup',{'restaurantName':'Kabul Darbar Dubai','slug':'dubai','country':'AF','ownerName':'Owner','contact':'o@example.com','pin':'900100','demoMenu':True,'terms':True},base=ROOT)
         # Manager sets up Dubai through the real admin UI
         a=await (await b.new_context(viewport={'width':1280,'height':900})).new_page(); a.on('pageerror',lambda e:errs.append(str(e)))
         a.on('dialog', lambda d: asyncio.ensure_future(d.accept()))
-        await a.goto(B+'/login'); await a.fill('#pin','9001'); await a.click('button.primary'); await a.wait_for_url('**/r/dubai/admin*')
+        await a.goto(B+'/login'); await a.fill('#pin','900100'); await a.click('button.primary'); await a.wait_for_url('**/r/dubai/admin*')
         await a.click('button:has-text("Settings")'); await a.click('text=UAE / Dubai'); await a.wait_for_timeout(800)
         await a.click('button:has-text("Settings")'); await a.wait_for_selector('text=Country, currency'); await a.screenshot(path='/tmp/dxb_settings.png')
-        _, ck = http('POST','/api/login',{'pin':'9001'})
+        _, ck = http('POST','/api/login',{'pin':'900100'})
         menu,_=http('GET','/api/admin/menu',c=ck)
         AR={'kabuli':('كابلي بلاو','أرز مع لحم الضأن والجزر والزبيب',4200),'mantu':('منتو','زلابية لحم مطهوة على البخار مع صلصة العدس واللبن',3500),'bolani':('بولاني','خبز رقيق محشو بالبطاطس والكراث',1800),'naan':('خبز أفغاني','خبز تنور طازج',500),'doogh':('دوغ','مشروب لبن بالنعناع',1200)}
         for it in menu['items']:

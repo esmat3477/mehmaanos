@@ -36,7 +36,7 @@ PHONES = {
 async def main():
     srv = start()
     try:
-        _, admin = http('POST', '/api/signup', {'restaurantName': 'E2E Kabul', 'slug': 'e2e', 'country': 'AF', 'ownerName': 'Tester', 'contact': 't@example.com', 'pin': '9001', 'demoMenu': True, 'terms': True}, base=SITE)
+        _, admin = http('POST', '/api/signup', {'restaurantName': 'E2E Kabul', 'slug': 'e2e', 'country': 'AF', 'ownerName': 'Tester', 'contact': 't@example.com', 'pin': '900100', 'demoMenu': True, 'terms': True}, base=SITE)
         http('POST', '/api/admin/users', {'name': 'Cook', 'role': 'kitchen', 'pin': '9003'}, admin)
         tables = http('GET', '/api/admin/tables', cookie=admin)[0]['tables']
         url = lambda i: tables[i]['url']

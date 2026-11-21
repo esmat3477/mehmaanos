@@ -13,7 +13,7 @@ Aria Run form:
 | Port | `3000` |
 | Git repository | `https://github.com/esmat3477/mehmaanos.git` |
 | Resources | 0.5 vCPU / 1 GB (enough for one restaurant) |
-| Env vars | `NODE_ENV=production`, `DATABASE_URL=...`, `APP_SECRET=...`, `PUBLIC_URL=https://<app domain>` |
+| Env vars | `NODE_ENV=production`, `DATABASE_URL=...`, `APP_SECRET=...`, `PUBLIC_URL=https://<app domain>`, `TRUST_PROXY=1`, `PLATFORM_PIN=...` |
 
 Alternative: build the `Dockerfile` and use "Custom Container" (port 3000; image has a health check).
 
@@ -21,7 +21,8 @@ Alternative: build the `Dockerfile` and use "Custom Container" (port 3000; image
 Any PostgreSQL 13+ (e.g. AWS RDS, smallest instance). The app creates its own tables (`mos_state`, `mos_backups`) on start. TLS is used automatically for non-local hosts. Single instance only: do not run more than one replica against the same database.
 
 ## 3. Platform setup
-- Set `PLATFORM_PIN` (owner console at `/platform`), `APP_SECRET`, `DATABASE_URL`, `PUBLIC_URL`.
+- Set `PLATFORM_PIN` (10+ characters; owner console at `/platform`), `APP_SECRET`, `DATABASE_URL`, `PUBLIC_URL`, and `TRUST_PROXY=1` (Aria Run sits behind a load balancer).
+- A restaurant manager who forgets their PIN: `/platform` → **Reset manager PIN**.
 - For a controlled launch set `SIGNUP_CODE` and give the code only to pilot restaurants.
 - Upgrading the earlier single-restaurant version: its data becomes `/r/main`; old printed QR codes and bookmarks redirect automatically.
 - Billing is manual for now: when a restaurant pays, open `/platform` → **Mark paid / active**. Connecting a payment provider (e.g. Stripe) is a separate step that needs the company's own account and keys.

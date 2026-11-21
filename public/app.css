@@ -108,3 +108,8 @@ body.kds{min-height:100vh}
 .langsel{width:auto;min-width:110px;min-height:40px;padding:.35rem .6rem;font-weight:600}
 header.top .wrap{gap:10px}
 header.top .wrap>div:first-child{min-width:0}
+
+.kds #title{color:#ccc}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.item h2.dish{margin:0;font-size:1.02rem}
+.kds .brand span{color:#F0A27A}

@@ -18,7 +18,7 @@
   function qrImg(text) { const q = qrcode(0, 'M'); q.addData(text); q.make(); return el('img', { src: q.createDataURL(6, 2), alt: 'QR code' }); }
   function modal(title, body, onSave, saveLabel = 'Save') {
     const box = el('div', { class: 'card', style: 'max-width:640px;margin:auto' });
-    const sheet = el('div', { class: 'sheet', style: 'align-items:center;padding:12px', onclick: e => { if (e.target === sheet) sheet.remove(); } }, box);
+    const sheet = el('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': title, style: 'align-items:center;padding:12px', onclick: e => { if (e.target === sheet) sheet.remove(); } }, box);
     fill(box, el('div', { class: 'row between' }, el('h2', { style: 'margin:0' }, title), el('button', { class: 'ghost', onclick: () => sheet.remove() }, 'Close')),
       body, el('div', { class: 'row', style: 'justify-content:flex-end;margin-top:14px' },
         el('button', { class: 'primary', onclick: () => go(async () => { await onSave(); sheet.remove(); draw(); }) }, saveLabel)));
@@ -110,7 +110,7 @@
   async function staffTab() {
     const { users, envPins, setupMode } = await api('GET', '/api/admin/users');
     const name = el('input', { placeholder: 'e.g. Farid' }), role = el('select', {}, el('option', { value: 'staff' }, 'Waiter / floor'), el('option', { value: 'kitchen' }, 'Kitchen'), el('option', { value: 'admin' }, 'Manager (admin)'));
-    const pin = el('input', { type: 'password', inputmode: 'numeric', placeholder: '4–8 digits', autocomplete: 'new-password' });
+    const pin = el('input', { type: 'password', inputmode: 'numeric', placeholder: '4–8 digits (managers 6+)', autocomplete: 'new-password' });
     return el('div', {},
       setupMode ? el('div', { class: 'banner bad' }, 'Setup mode: the built-in PINs 1111 / 2222 / 3333 work until you create a Manager account below. Create your own Manager account first.') : null,
       el('p', { class: 'muted small' }, 'Give each person their own PIN so the audit log shows who accepted, cancelled or changed what. Deactivating someone signs them out immediately.'),
@@ -122,7 +122,7 @@
           toast('Account created'); draw();
         }) }, 'Add person')),
       el('div', { class: 'card' }, el('table', { class: 'list' },
-        el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Role'), el('th', {}, 'Status'), el('th', {}, '')),
+        el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Role'), el('th', {}, 'Status'), el('th', {}, 'Actions')),
         ...users.map(u => el('tr', {},
           el('td', {}, el('b', {}, u.name)), el('td', {}, u.role), el('td', {}, u.active ? 'active' : el('span', { class: 'muted' }, 'deactivated')),
           el('td', { style: 'text-align:end' },
@@ -137,7 +137,7 @@
   async function reportTab() {
     const r = await api('GET', `/api/admin/report?date=${reportDate}&tz=${new Date().getTimezoneOffset()}`);
     const cur = r.currency;
-    const dateIn = el('input', { type: 'date', value: reportDate, style: 'max-width:180px', onchange: e => { reportDate = e.target.value; draw(); } });
+    const dateIn = el('input', { type: 'date', 'aria-label': 'Report date', value: reportDate, style: 'max-width:180px', onchange: e => { reportDate = e.target.value; draw(); } });
     const stat = (label, val, sub) => el('div', { class: 'card' }, el('div', { class: 'small muted' }, label), el('div', { style: 'font-size:1.5rem;font-weight:800' }, val), sub ? el('div', { class: 'small muted' }, sub) : null);
     const T = r.timesSec;
     return el('div', {},

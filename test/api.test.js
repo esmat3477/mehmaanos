@@ -30,8 +30,8 @@ const j = async (method, url, body, cookie) => {
   return { status: r.status, body: r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text(), cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
 };
 test.before(async () => {
-  ({ p: proc, b: root } = await boot({ PLATFORM_PIN: '777777' }));
-  const s = await signup('test-resto', '9001');
+  ({ p: proc, b: root } = await boot({ PLATFORM_PIN: '7777777777' }));
+  const s = await signup('test-resto', '900100');
   assert.strictEqual(s.status, 201, JSON.stringify(s.body));
   base = `${root}/r/test-resto`;
   ADMIN = s.cookie;
@@ -148,14 +148,14 @@ test('upgrade from single-restaurant install: becomes /r/main, old links redirec
     assert.strictEqual(menu.body.restaurant.name, 'Old Place');
     const setup = await raw('POST', '/r/main/api/login', { pin: '1111' }, null, b);
     assert.strictEqual(setup.status, 200);
-    assert.strictEqual((await raw('POST', '/r/main/api/admin/users', { name: 'Owner', role: 'admin', pin: '7391' }, setup.cookie, b)).status, 201);
+    assert.strictEqual((await raw('POST', '/r/main/api/admin/users', { name: 'Owner', role: 'admin', pin: '739100' }, setup.cookie, b)).status, 201);
     assert.strictEqual((await raw('POST', '/r/main/api/login', { pin: '1111' }, null, b)).status, 401, 'setup PIN disabled');
     assert.strictEqual((await raw('GET', '/r/main/api/state', null, setup.cookie, b)).status, 401, 'old setup session revoked');
   } finally { p.kill(); }
 });
 
 test('isolation: one restaurant can never see or change another', async () => {
-  const s = await signup('other-place', '5150');
+  const s = await signup('other-place', '515000');
   assert.strictEqual(s.status, 201);
   const B = s.cookie;
   const rawB = (m, u, body, c) => raw(m, '/r/other-place' + u, body, c);
@@ -163,7 +163,7 @@ test('isolation: one restaurant can never see or change another', async () => {
   assert.strictEqual((await j('GET', '/api/state', null, B)).status, 401);
   assert.strictEqual((await rawB('GET', '/api/state', null, ADMIN)).status, 401);
   // A's PIN does not log in at B
-  assert.strictEqual((await rawB('POST', '/api/login', { pin: '9001' })).status, 401);
+  assert.strictEqual((await rawB('POST', '/api/login', { pin: '900100' })).status, 401);
   // A's table QR token is rejected at B (signed with a different secret)
   const { body: { tables } } = await j('GET', '/api/admin/tables', null, ADMIN);
   const tokA = tables[0].url.split('/t/')[1];
@@ -177,7 +177,7 @@ test('isolation: one restaurant can never see or change another', async () => {
   const anyA = (await j('GET', '/api/state', null, ADMIN)).body.orders[0];
   if (anyA) assert.strictEqual((await rawB('POST', `/api/orders/${anyA.id}/status`, { to: 'Canceled' }, B)).status, 404);
   // Cookies are scoped to each restaurant's path
-  assert.match((await rawB('POST', '/api/login', { pin: '5150' })).cookie, /^mos=/);
+  assert.match((await rawB('POST', '/api/login', { pin: '515000' })).cookie, /^mos=/);
 });
 
 test('signup rules: unique and valid web address, PIN, terms', async () => {
@@ -188,7 +188,7 @@ test('signup rules: unique and valid web address, PIN, terms', async () => {
   assert.strictEqual((await signup('fine-slug', '1234', { terms: false })).status, 400);
   const chk = await raw('GET', '/api/signup/check?slug=test-resto');
   assert.strictEqual(chk.body.available, false);
-  const ae = await signup('dubai-demo', '2468', { country: 'AE' });
+  const ae = await signup('dubai-demo', '246800', { country: 'AE' });
   const st = (await raw('GET', '/r/dubai-demo/api/admin/menu', null, ae.cookie)).body;
   assert.strictEqual(st.items.find(i => i.id === 'kabuli').price, 1800, 'sample menu gets AED prices (AED 18.00)');
 });
@@ -196,15 +196,15 @@ test('signup rules: unique and valid web address, PIN, terms', async () => {
 test('owner console: list, suspend locks guests and staff, reactivate, delete', async () => {
   assert.strictEqual((await raw('GET', '/api/platform/tenants')).status, 401);
   assert.strictEqual((await raw('POST', '/api/platform/login', { pin: '000000' })).status, 401);
-  const P = (await raw('POST', '/api/platform/login', { pin: '777777' })).cookie;
+  const P = (await raw('POST', '/api/platform/login', { pin: '7777777777' })).cookie;
   const list = (await raw('GET', '/api/platform/tenants', null, P)).body.tenants;
   const other = list.find(t => t.slug === 'other-place');
   assert.ok(other && other.status === 'trial' && other.trialEndsAt);
   assert.ok(!JSON.stringify(list).includes('pinHash') && !JSON.stringify(list).includes('secret'));
   await raw('POST', `/api/platform/tenants/${other.id}`, { status: 'suspended' }, P);
-  assert.strictEqual((await raw('POST', '/r/other-place/api/login', { pin: '5150' })).status, 423);
+  assert.strictEqual((await raw('POST', '/r/other-place/api/login', { pin: '515000' })).status, 423);
   await raw('POST', `/api/platform/tenants/${other.id}`, { status: 'active', paidUntil: '2027-01-31' }, P);
-  assert.strictEqual((await raw('POST', '/r/other-place/api/login', { pin: '5150' })).status, 200);
+  assert.strictEqual((await raw('POST', '/r/other-place/api/login', { pin: '515000' })).status, 200);
   const exp = await raw('GET', `/api/platform/tenants/${other.id}/export`, null, P);
   assert.ok(!/pinHash|"secret"/.test(typeof exp.body === 'string' ? exp.body : JSON.stringify(exp.body)), 'export holds no PIN hashes or secrets');
   assert.strictEqual((await raw('POST', `/api/platform/tenants/${other.id}/delete`, { confirm: 'wrong' }, P)).status, 400);
@@ -236,4 +236,67 @@ test('Dubai setup: UAE preset gives AED, 5% VAT included, Arabic; orders carry V
   assert.strictEqual((await j('POST', '/api/admin/settings', { tax: { mode: 'inclusive', rate: 9000 } }, admin)).status, 400, 'absurd tax rate refused');
   const csv = await j('GET', '/api/admin/export.csv', null, admin);
   assert.match(csv.body, /"AED","2"/);
+});
+
+test('security: PIN change signs the person out, manager PINs need 6 digits, CSV formulas neutralised', async () => {
+  const admin = await adminLogin();
+  assert.strictEqual((await j('POST', '/api/admin/users', { name: 'Weak Boss', role: 'admin', pin: '4321' }, admin)).status, 400);
+  const u = await j('POST', '/api/admin/users', { name: 'Zahra', role: 'staff', pin: '246810' }, admin);
+  const z = (await j('POST', '/api/login', { pin: '246810' })).cookie;
+  assert.strictEqual((await j('GET', '/api/state', null, z)).status, 200);
+  await j('POST', `/api/admin/users/${u.body.id}/pin`, { pin: '135790' }, admin);
+  assert.strictEqual((await j('GET', '/api/state', null, z)).status, 401, 'old session ends after PIN change');
+  assert.strictEqual((await j('POST', '/api/login', { pin: '246810' })).status, 401, 'old PIN no longer works');
+  assert.strictEqual((await j('POST', '/api/login', { pin: '135790' })).status, 200);
+  // spreadsheet formula in a guest note is neutralised in the CSV
+  const { body: { tables } } = await j('GET', '/api/admin/tables', null, admin);
+  const tok = tables[1].url.split('/t/')[1];
+  await j('POST', `/api/guest/${tok}/orders`, { idemKey: 'csvinject01', cart: [{ itemId: 'naan', qty: 1, note: '=HYPERLINK("http://evil")' }] });
+  await j('POST', '/api/admin/items', { cat: 'mains', price: 100, name: { en: '=cmd|calc' } }, admin);
+  const csv = (await j('GET', '/api/admin/export.csv', null, admin)).body;
+  assert.ok(!/"=/.test(csv), 'no cell starts with =');
+});
+
+test('security: forged X-Forwarded-For cannot bypass login limits (no trusted proxy)', async () => {
+  let blocked = false;
+  for (let i = 0; i < 12; i++) {
+    const r = await fetch(base + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.0.0.${i}` }, body: JSON.stringify({ pin: '000000' }) });
+    if (r.status === 429) { blocked = true; break; }
+  }
+  assert.ok(blocked, 'rate limit applies to the real connection, not the forged header');
+});
+
+test('owner console: reset a locked-out manager PIN', async () => {
+  const P = (await raw('POST', '/api/platform/login', { pin: '7777777777' })).cookie;
+  const t = (await raw('GET', '/api/platform/tenants', null, P)).body.tenants.find(x => x.slug === 'dubai-demo');
+  const r = await raw('POST', `/api/platform/tenants/${t.id}/reset-pin`, {}, P);
+  assert.strictEqual(r.status, 200); assert.match(r.body.pin, /^\d{6}$/);
+  assert.strictEqual((await raw('POST', '/r/dubai-demo/api/login', { pin: r.body.pin })).status, 200);
+  assert.strictEqual((await raw('POST', '/r/dubai-demo/api/login', { pin: '246800' })).status, 401, 'old manager PIN replaced');
+});
+
+test('archiving: old finished orders move to monthly archives; report and CSV still include them', async () => {
+  // Use the platform library directly on a fresh data folder with orders dated 3 months ago.
+  const { Platform, seed } = require('../lib/store');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-arc-'));
+  const pf = new Platform({ dataDir: dir }); await pf.init();
+  const data = seed();
+  const old = new Date(Date.now() - 90 * 864e5).toISOString();
+  for (let i = 1; i <= 500; i++) data.orders.push({ id: 'o' + i, no: i, tableId: 'T1', status: i % 10 ? 'Closed' : 'Canceled', total: 100, tax: 0, createdAt: old, lines: [{ itemId: 'naan', name: { en: 'Afghan naan' }, qty: 1, lineTotal: 100 }], events: [] });
+  data.orders.push({ id: 'live', no: 501, tableId: 'T1', status: 'Accepted', total: 50, createdAt: old, lines: [], events: [] }); // unfinished: must stay live
+  await pf.create({ id: 't_arc', slug: 'arc', name: 'Arc', status: 'trial' }, data);
+  pf.tenants.clear();
+  const doc = await pf.open(pf.find('arc')); // archiving runs on open
+  assert.deepStrictEqual(doc.data.orders.map(o => o.id), ['live'], 'only the unfinished order stays live');
+  assert.strictEqual(doc.data.archives.length, 1);
+  const day = old.slice(0, 10), from = Date.parse(day + 'T00:00:00Z');
+  const span = await pf.ordersBetween(doc, from, from + 864e5);
+  const { dailyReport } = require('../lib/report');
+  const r = dailyReport({ ...doc.data, orders: span.orders, requests: span.requests }, day, 0);
+  assert.strictEqual(r.orders.total, 501, 'report for an old day still sees every order');
+  assert.strictEqual(r.exceptions.length, 50);
+  assert.strictEqual((await pf.allArchived(doc)).orders.length, 500);
+  await pf.remove(pf.find('arc'));
+  assert.ok(!fs.readdirSync(dir).some(f => f.startsWith('t_arc')), 'deleting a restaurant also deletes its archives');
+  await pf.close();
 });

@@ -11,7 +11,7 @@
     const msg = el('p', { class: 'small', style: 'color:var(--bad)' }, message || '');
     fill(app, el('form', { class: 'card narrow', style: 'margin-top:40px', onsubmit: e => { e.preventDefault(); go(async () => {
       try { await api('POST', '/api/platform/login', { pin: pin.value }); draw(); } catch (er) { msg.textContent = er.message; }
-    }); } }, el('h2', { style: 'margin-top:0' }, 'Owner console'), pin, msg, el('button', { class: 'primary', style: 'width:100%' }, 'Sign in')));
+    }); } }, el('h1', { style: 'margin-top:0;font-size:1.2rem' }, 'Owner console'), el('label', { class: 'small muted' }, 'Owner PIN', pin), msg, el('button', { class: 'primary', style: 'width:100%' }, 'Sign in')));
     pin.focus();
   }
 
@@ -56,6 +56,8 @@
             el('button', { class: 'ghost', onclick: () => set({ status: t.status === 'active' ? 'active' : 'trial', extendTrialDays: 30 }) }, '+30 days trial'),
             t.status !== 'suspended' ? el('button', { class: 'bad', onclick: () => confirm(`Suspend ${t.name}? Guests and staff will be locked out until you reactivate.`) && set({ status: 'suspended' }) }, 'Suspend')
               : el('button', { onclick: () => set({ status: 'trial' }) }, 'Reactivate'),
+            el('button', { class: 'ghost', onclick: () => confirm(`Give ${t.name}'s manager a new temporary PIN? Their current manager PIN stops working.`) && go(async () => {
+              const r = await api('POST', `/api/platform/tenants/${t.id}/reset-pin`, {}); alert(`New PIN for ${r.name}: ${r.pin}\n\n${r.note}`); }) }, 'Reset manager PIN'),
             el('button', { class: 'ghost', onclick: () => { const n = prompt('Note (only you see this):', t.note || ''); if (n !== null) set({ note: n }); } }, 'Note'),
             el('a', { href: `/api/platform/tenants/${t.id}/export` }, el('button', { class: 'ghost' }, 'Export data')),
             el('button', { class: 'bad', onclick: () => { const c = prompt(`Permanently delete ${t.name} and all its data? Type its web address "${t.slug}" to confirm:`); if (c) go(async () => { await api('POST', `/api/platform/tenants/${t.id}/delete`, { confirm: c }); toast('Deleted'); draw(); }); } }, 'Delete')));

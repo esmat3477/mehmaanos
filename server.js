@@ -76,9 +76,10 @@ function who(req) {
   if (s.uid === 'setup' && !setupMode()) return null; // setup PINs die as soon as a real admin exists
   if (s.uid === 'env' && !envPins()[s.role]) return null;
   if (s.uid === 'env' || s.uid === 'setup') return { ...s, name: `${s.role} (${s.uid === 'env' ? 'shared PIN' : 'setup PIN'})` };
-  const u = D().users.find(x => x.id === s.uid);
-  if (!u || !u.active || u.role !== s.role) return null;
-  return { ...s, name: u.name };
+  const [uid, ver] = s.uid.split('-');
+  const u = D().users.find(x => x.id === uid);
+  if (!u || !u.active || u.role !== s.role || String(u.sv || 0) !== (ver || '0')) return null; // PIN change / deactivation ends sessions
+  return { ...s, uid, name: u.name };
 }
 function need(req, roles) {
   const w = who(req);
@@ -87,15 +88,24 @@ function need(req, roles) {
 }
 function baseUrl(req) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
-  const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0];
-  return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`;
+  const trust = process.env.TRUST_PROXY === '1';
+  const proto = trust ? (req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() : (req.socket.encrypted ? 'https' : 'http');
+  return `${proto}://${(trust && req.headers['x-forwarded-host']) || req.headers.host}`;
 }
-function ip(req) { return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim(); }
+// Client IP for rate limits. X-Forwarded-For is only trusted behind a proxy (TRUST_PROXY=1), and then only
+// its LAST entry, which the proxy itself appended; earlier entries can be forged by the client.
+function ip(req) {
+  if (process.env.TRUST_PROXY === '1' && req.headers['x-forwarded-for']) return req.headers['x-forwarded-for'].split(',').pop().trim();
+  return req.socket.remoteAddress || '';
+}
 const now = () => new Date().toISOString();
 
 // Simple fixed-window rate limiter.
 const buckets = new Map();
+const NO_LIMITS = process.env.LOADTEST_DISABLE_RATE_LIMITS === '1'; // load testing only, never in production
+if (NO_LIMITS) console.warn('WARNING: rate limits disabled (LOADTEST_DISABLE_RATE_LIMITS=1). Never use this in production.');
 function limited(key, max, windowMs) {
+  if (NO_LIMITS) return false;
   key = (als.getStore()?.entry.id || '_') + ':' + key;
   const t = Date.now(); const b = buckets.get(key);
   if (!b || t - b.start > windowMs) { buckets.set(key, { start: t, n: 1 }); return false; }
@@ -150,7 +160,7 @@ function createOrder(table, body) {
   const existing = d.orders.find(o => o.tableId === table.id && o.idemKey === idem);
   if (existing) return { order: existing, duplicate: true };
   const open = d.orders.filter(o => o.tableId === table.id && ['PendingApproval', 'Accepted', 'InPreparation'].includes(o.status)).length;
-  if (open >= 5) throw new OrderError('TOO_MANY_OPEN', 'This table has several open orders. Please ask a waiter.', 429);
+  if (open >= 5 && !NO_LIMITS) throw new OrderError('TOO_MANY_OPEN', 'This table has several open orders. Please ask a waiter.', 429);
   const q = quote(d.menu, body.cart, d.restaurant.tax);
   d.counters.order++;
   const status = d.settings.requireApproval ? 'PendingApproval' : 'Accepted';
@@ -235,16 +245,23 @@ async function tenantHandle(req, res, url, p) {
     if (M === 'POST' && p === '/api/login') {
       if (isSuspended()) throw new OrderError('SUSPENDED', 'This restaurant account is suspended. Please contact MehmaanOS support.', 423);
       if (limited('login:' + ip(req), 8, 5 * 60e3)) throw new OrderError('RATE', 'Too many attempts. Try again in a few minutes.', 429);
+      // Restaurant-wide brake: after many failures from anywhere, slow every attempt (stops distributed guessing
+      // without locking real staff out mid-service).
+      const fails = D().loginFails = (D().loginFails || []).filter(t => t > Date.now() - 15 * 60e3);
+      if (fails.length >= 30 && limited('loginbrake', 1, 10e3)) throw new OrderError('RATE', 'Too many wrong PINs for this restaurant. Wait 10 seconds and try again.', 429);
       const { pin } = await readBody(req);
       const pinStr = String(pin || '');
       let found = null;
       const rank = { admin: 0, staff: 1, kitchen: 2 };
-      for (const u of D().users.filter(u => u.active).sort((a, b) => rank[a.role] - rank[b.role])) {
-        if (auth.checkPin(pinStr, u.pinHash)) { found = { role: u.role, uid: u.id, name: u.name }; break; }
+      const idx = auth.pinIndex(secret(), pinStr);
+      const active = D().users.filter(u => u.active).sort((a, b) => rank[a.role] - rank[b.role]);
+      const candidates = active.filter(u => u.pinIdx === idx).concat(active.filter(u => !u.pinIdx)); // old accounts without index: checked once, then indexed
+      for (const u of candidates) {
+        if (await auth.checkPinAsync(pinStr, u.pinHash)) { if (!u.pinIdx) { u.pinIdx = idx; } found = { role: u.role, uid: `${u.id}-${u.sv || 0}`, name: u.name }; break; }
       }
       if (!found) for (const r of ['admin', 'staff', 'kitchen']) if (envPins()[r] && auth.safeEq(envPins()[r], pinStr)) { found = { role: r, uid: 'env', name: `${r} (shared PIN)` }; break; }
       if (!found && setupMode()) for (const r of ['admin', 'staff', 'kitchen']) if (auth.safeEq(SETUP_PINS[r], pinStr)) { found = { role: r, uid: 'setup', name: `${r} (setup PIN)` }; break; }
-      if (!found) { store.audit('anon', 'login.fail', { ip: ip(req) }); store.save(); throw new OrderError('BAD_PIN', 'Wrong PIN', 401); }
+      if (!found) { fails.push(Date.now()); store.audit('anon', 'login.fail', { ip: ip(req) }); store.save(); throw new OrderError('BAD_PIN', 'Wrong PIN', 401); }
       store.audit(found.name, 'login', { ip: ip(req), role: found.role }); store.save();
       const secure = baseUrl(req).startsWith('https') ? '; Secure' : '';
       return send(res, 200, { role: found.role, name: found.name }, { 'Set-Cookie': `mos=${auth.sessionCookie(secret(), found.role, found.uid)}; HttpOnly; SameSite=Strict; Path=/r/${slug}; Max-Age=50400${secure}` });
@@ -432,9 +449,11 @@ async function tenantHandle(req, res, url, p) {
         if (!name) throw new OrderError('BAD_NAME', 'Name is required');
         if (!auth.ROLES.includes(b.role)) throw new OrderError('BAD_ROLE', 'Choose a role');
         if (!auth.validPin(b.pin)) throw new OrderError('BAD_PIN', 'PIN must be 4 to 8 digits');
-        if (d.users.some(u => u.active && auth.checkPin(b.pin, u.pinHash)) || Object.values(envPins()).includes(String(b.pin))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
+        if (b.role === 'admin' && String(b.pin).length < 6) throw new OrderError('BAD_PIN', 'Manager PINs need at least 6 digits');
+        const idx = auth.pinIndex(secret(), b.pin);
+        if (d.users.some(u => u.active && (u.pinIdx ? u.pinIdx === idx : auth.checkPin(b.pin, u.pinHash))) || Object.values(envPins()).includes(String(b.pin))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
         d.counters.user = (d.counters.user || 0) + 1;
-        const u = { id: 'u' + d.counters.user, name, role: b.role, active: true, createdAt: now(), pinHash: auth.hashPin(b.pin) };
+        const u = { id: 'u' + d.counters.user, name, role: b.role, active: true, createdAt: now(), pinHash: auth.hashPin(b.pin), pinIdx: idx, sv: 0 };
         d.users.push(u);
         store.audit(role, 'user.add', { id: u.id, name, role: u.role }); store.save();
         return send(res, 201, { id: u.id });
@@ -446,13 +465,15 @@ async function tenantHandle(req, res, url, p) {
         if (ua[2] === 'pin') {
           const { pin } = await readBody(req);
           if (!auth.validPin(pin)) throw new OrderError('BAD_PIN', 'PIN must be 4 to 8 digits');
-          if (d.users.some(x => x !== u && x.active && auth.checkPin(pin, x.pinHash))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
-          u.pinHash = auth.hashPin(pin);
+          if (u.role === 'admin' && String(pin).length < 6) throw new OrderError('BAD_PIN', 'Manager PINs need at least 6 digits');
+          const idx = auth.pinIndex(secret(), pin);
+          if (d.users.some(x => x !== u && x.active && (x.pinIdx ? x.pinIdx === idx : auth.checkPin(pin, x.pinHash)))) throw new OrderError('PIN_TAKEN', 'That PIN is already used. Choose another.', 409);
+          u.pinHash = auth.hashPin(pin); u.pinIdx = idx; u.sv = (u.sv || 0) + 1; // signs this person out everywhere
         } else {
           const me = need(req, ['admin']);
           if (ua[2] === 'deactivate' && me.uid === u.id) throw new OrderError('SELF', 'You cannot deactivate yourself', 409);
           if (ua[2] === 'deactivate' && u.role === 'admin' && !hasEnvPins() && d.users.filter(x => x.active && x.role === 'admin').length === 1) throw new OrderError('LAST_ADMIN', 'Keep at least one active admin', 409);
-          u.active = ua[2] === 'activate';
+          u.active = ua[2] === 'activate'; u.sv = (u.sv || 0) + 1;
         }
         store.audit(role, 'user.' + ua[2], { id: u.id, name: u.name }); store.save();
         return send(res, 200, { ok: true });
@@ -463,13 +484,17 @@ async function tenantHandle(req, res, url, p) {
         const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
         const tz = Number(url.searchParams.get('tz') || 0);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(tz)) throw new OrderError('BAD_DATE', 'Invalid date');
-        return send(res, 200, dailyReport(d, date, tz));
+        const from = Date.parse(date + 'T00:00:00Z') + tz * 60e3;
+        const span = await platform.ordersBetween(T().doc, from, from + 864e5);
+        return send(res, 200, dailyReport({ ...d, orders: span.orders, requests: span.requests }, date, tz));
       }
 
       // ----- backup / restore -----
       if (M === 'GET' && p === '/api/admin/backup.json') {
         store.audit(role, 'backup.download', {}); store.save();
-        const { secret, ...doc } = d;
+        const { secret: _s, loginFails: _f, ...doc } = d;
+        doc.users = doc.users.map(({ pinHash, pinIdx, ...u }) => u);
+        doc.archived = await platform.allArchived(T().doc);
         return send(res, 200, JSON.stringify(doc), { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="mehmaanos-backup-${now().slice(0, 10)}.json"` });
       }
       if (M === 'GET' && p === '/api/admin/system') {
@@ -478,10 +503,12 @@ async function tenantHandle(req, res, url, p) {
 
       if (M === 'GET' && p === '/api/admin/audit') return send(res, 200, { audit: d.audit.slice(-300).reverse() });
       if (M === 'GET' && p === '/api/admin/export.csv') {
-        const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        // Neutralise spreadsheet formulas (=, +, -, @) in text written by guests or staff.
+        const esc = v => { let t = String(v ?? ''); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
         // Amounts in minor units (e.g. fils for AED, whole afghani for AFN): see currency_decimals.
         const rows = [['order_no', 'table', 'status', 'created_at', 'item', 'qty', 'unit_price', 'line_total', 'line_tax', 'tax_rate_pct', 'order_total', 'order_tax', 'tax_mode', 'currency', 'currency_decimals']];
-        for (const o of d.orders) for (const l of o.lines) rows.push([o.no, o.tableId, o.status, o.createdAt, l.name.en, l.qty, l.unitPrice, l.lineTotal, l.tax || 0, (l.taxRate || 0) / 100, o.total, o.tax || 0, o.taxMode || 'none', o.currency, CURRENCIES[o.currency] ?? 0]);
+        const arc = await platform.allArchived(T().doc);
+        for (const o of [...arc.orders, ...d.orders]) for (const l of o.lines) rows.push([o.no, o.tableId, o.status, o.createdAt, l.name.en, l.qty, l.unitPrice, l.lineTotal, l.tax || 0, (l.taxRate || 0) / 100, o.total, o.tax || 0, o.taxMode || 'none', o.currency, CURRENCIES[o.currency] ?? 0]);
         return send(res, 200, rows.map(r => r.map(esc).join(',')).join('\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="mehmaanos-orders.csv"' });
       }
     }
@@ -508,7 +535,8 @@ const TRIAL_DAYS = Number(process.env.TRIAL_DAYS || 60);
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/;
 const platformSecret = () => process.env.APP_SECRET ? hmacHex(process.env.APP_SECRET, 'platform') : platform.registry.data.secret;
 
-function security(res) {
+function security(res, req) {
+  if (req && (req.socket.encrypted || (process.env.TRUST_PROXY === '1' && /^https/.test(req.headers['x-forwarded-proto'] || '')))) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -517,7 +545,7 @@ function security(res) {
 const redirect = (res, to) => { res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' }); res.end(); };
 
 async function handle(req, res) {
-  security(res);
+  security(res, req);
   const url = new URL(req.url, 'http://x');
   const p = url.pathname, M = req.method;
 
@@ -572,7 +600,7 @@ async function signup(req, res) {
   if (contact.length < 5) throw new OrderError('BAD_CONTACT', 'Email or phone is required so we can reach you');
   if (!SLUG_RE.test(slug) || RESERVED.has(slug)) throw new OrderError('BAD_SLUG', 'Web address: 3–40 lowercase letters, numbers or dashes');
   if (platform.find(slug)) throw new OrderError('SLUG_TAKEN', 'That web address is taken. Try another.', 409);
-  if (!auth.validPin(b.pin)) throw new OrderError('BAD_PIN', 'PIN must be 4 to 8 digits');
+  if (!auth.validPin(b.pin) || String(b.pin).length < 6) throw new OrderError('BAD_PIN', 'Manager PIN must be 6 to 8 digits');
   if (b.terms !== true) throw new OrderError('TERMS', 'Please accept the terms to continue');
 
   const data = seed();
@@ -583,7 +611,7 @@ async function signup(req, res) {
   if (!b.demoMenu) data.menu.items = [];
   // The sample menu is priced in afghani; give 2-decimal currencies sensible round sample prices (~20 AFN = 1 unit).
   else if ((CURRENCIES[data.restaurant.currency] ?? 0) === 2) for (const it of data.menu.items) it.price = Math.max(1, Math.round(it.price / 20)) * 100;
-  data.users = [{ id: 'u1', name: owner, role: 'admin', active: true, createdAt: now(), pinHash: auth.hashPin(b.pin) }];
+  data.users = [{ id: 'u1', name: owner, role: 'admin', active: true, createdAt: now(), pinHash: auth.hashPin(b.pin), pinIdx: null, sv: 0 }];
   data.counters.user = 1;
   data.audit = [{ at: now(), actor: owner, action: 'restaurant.signup', detail: { slug, country: b.country || 'custom' } }];
   const entry = {
@@ -594,7 +622,7 @@ async function signup(req, res) {
   try { await platform.create(entry, data); } catch (e) { if (/slug taken/.test(e.message)) throw new OrderError('SLUG_TAKEN', 'That web address is taken. Try another.', 409); throw e; }
   console.log(`signup: ${slug} (${name})`);
   const doc = platform.tenants.get(entry.id);
-  const cookie = als.run({ entry, doc }, () => auth.sessionCookie(secret(), 'admin', 'u1'));
+  const cookie = als.run({ entry, doc }, () => { doc.data.users[0].pinIdx = auth.pinIndex(secret(), b.pin); doc.save(); return auth.sessionCookie(secret(), 'admin', 'u1-0'); });
   const secure = baseUrl(req).startsWith('https') ? '; Secure' : '';
   return send(res, 201, { slug, url: `/r/${slug}/admin` }, { 'Set-Cookie': `mos=${cookie}; HttpOnly; SameSite=Strict; Path=/r/${slug}; Max-Age=50400${secure}` });
 }
@@ -619,7 +647,7 @@ async function tenantStats(entry) {
 }
 async function platformApi(req, res, url, p) {
   const M = req.method;
-  if (!process.env.PLATFORM_PIN) throw new OrderError('DISABLED', 'Owner console is disabled. Set PLATFORM_PIN on the server to enable it.', 404);
+  if (!process.env.PLATFORM_PIN || process.env.PLATFORM_PIN.length < 10) throw new OrderError('DISABLED', 'Owner console is disabled. Set PLATFORM_PIN (at least 10 characters) on the server to enable it.', 404);
   if (M === 'POST' && p === '/api/platform/login') {
     if (limited('plogin:' + ip(req), 5, 15 * 60e3)) throw new OrderError('RATE', 'Too many attempts. Try again later.', 429);
     const { pin } = await readBody(req);
@@ -636,14 +664,28 @@ async function platformApi(req, res, url, p) {
     for (const e of platform.list()) list.push(await tenantStats(e));
     return send(res, 200, { tenants: list, trialDays: TRIAL_DAYS, signup: { inviteRequired: !!process.env.SIGNUP_CODE, disabled: process.env.SIGNUP_DISABLED === '1' } });
   }
-  const tm = p.match(/^\/api\/platform\/tenants\/([\w-]+)(?:\/(export|delete))?$/);
+  const tm = p.match(/^\/api\/platform\/tenants\/([\w-]+)(?:\/(export|delete|reset-pin))?$/);
   if (tm) {
     const entry = platform.list().find(t => t.id === tm[1]);
     if (!entry) throw new OrderError('NOT_FOUND', 'Restaurant not found', 404);
     if (M === 'GET' && tm[2] === 'export') {
-      const { secret: _s, ...doc } = (await platform.open(entry)).data;
-      doc.users = doc.users.map(({ pinHash, ...u }) => u);
+      const live = await platform.open(entry);
+      const { secret: _s, loginFails: _f, ...doc } = live.data;
+      doc.users = doc.users.map(({ pinHash, pinIdx, ...u }) => u);
+      doc.archived = await platform.allArchived(live);
       return send(res, 200, JSON.stringify({ restaurant: entry, data: doc }), { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="mehmaanos-${entry.slug}-${now().slice(0, 10)}.json"` });
+    }
+    if (M === 'POST' && tm[2] === 'reset-pin') {
+      const doc = await platform.open(entry);
+      const pin = String(crypto.randomInt(100000, 1000000));
+      return await als.run({ entry, doc }, async () => {
+        const d = D();
+        let u = d.users.find(x => x.active && x.role === 'admin');
+        if (!u) { d.counters.user = (d.counters.user || 0) + 1; u = { id: 'u' + d.counters.user, name: entry.owner || 'Manager', role: 'admin', active: true, createdAt: now() }; d.users.push(u); }
+        u.pinHash = auth.hashPin(pin); u.pinIdx = auth.pinIndex(secret(), pin); u.sv = (u.sv || 0) + 1;
+        store.audit('platform', 'user.pin_reset', { id: u.id, name: u.name }); await store.flush();
+        return send(res, 200, { name: u.name, pin, note: 'Give this temporary PIN to the manager by phone and ask them to change it in Admin → Staff.' });
+      });
     }
     if (M === 'POST' && tm[2] === 'delete') {
       const { confirm } = await readBody(req);
@@ -685,6 +727,8 @@ async function start() {
       });
     }
   }, 15e3).unref();
+  // Daily: archive old finished orders in every loaded restaurant.
+  setInterval(async () => { for (const doc of platform.tenants.values()) await platform.archive(doc).catch(e => console.error('archive failed', doc.id, e.message)); }, 24 * 3600e3).unref();
   await new Promise(r => server.listen(PORT, r));
   console.log(`MehmaanOS listening on :${PORT} · storage=${platform.driver.name} · restaurants=${platform.list().length}${process.env.PLATFORM_PIN ? ' · owner console on' : ''}${process.env.SIGNUP_CODE ? ' · invite-only signup' : ''}`);
 }

@@ -120,7 +120,7 @@
     const seg = el('div', { class: 'seg' });
     const paint = () => { seg.replaceChildren(...['mild', 'medium', 'hot'].map(s => el('button', { class: s === choice ? 'on' : '', onclick: () => { choice = s; paint(); } }, t(s)))); };
     paint();
-    const sheet = el('div', { class: 'sheet', onclick: e => { if (e.target === sheet) sheet.remove(); } },
+    const sheet = el('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('spice'), onclick: e => { if (e.target === sheet) sheet.remove(); } },
       el('div', { class: 'card' },
         el('h2', {}, nm(item.name)), el('p', { class: 'muted' }, t('spice')), seg,
         el('div', { class: 'row', style: 'margin-top:14px' },
@@ -131,7 +131,7 @@
 
   function cartSheet() {
     const body = el('div', { class: 'card' });
-    const sheet = el('div', { class: 'sheet', onclick: e => { if (e.target === sheet) sheet.remove(); } }, body);
+    const sheet = el('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('cart'), onclick: e => { if (e.target === sheet) sheet.remove(); } }, body);
     const draw = () => {
       body.replaceChildren(
         el('div', { class: 'row between' }, el('h2', { style: 'margin:0' }, t('cart')), el('button', { class: 'ghost', onclick: () => sheet.remove() }, t('close'))),
@@ -214,7 +214,7 @@
         const inCart = S.cart.filter(l => l.itemId === it.id).reduce((a, l) => a + l.qty, 0);
         return el('article', { class: 'item' },
           el('div', { style: 'flex:1' },
-            el('h3', {}, nm(it.name)), el('p', {}, nm(it.desc)),
+            el('h2', { class: 'dish' }, nm(it.name)), el('p', {}, nm(it.desc)),
             el('div', { class: 'tags' },
               it.spicy ? el('span', { class: 'tag spicy' }, '🌶 ', t('spicy')) : null,
               ...(it.allergens || []).map(a => el('span', { class: 'tag' }, `${t('allergens')}: ${(T[S.lang] || T.en).al[a] || a}`)))),
@@ -227,7 +227,7 @@
     );
     let bar = document.querySelector('.cartbar');
     if (cartCount() && !S.data.orderingPaused) {
-      if (!bar) { bar = el('div', { class: 'cartbar' }); document.body.append(bar); }
+      if (!bar) { bar = el('div', { class: 'cartbar', role: 'region', 'aria-label': t('cart') }); document.body.append(bar); }
       bar.replaceChildren(el('div', { class: 'wrap narrow row between', style: 'padding:0' },
         el('div', {}, el('b', {}, money(cartTotal(), cur(), S.lang)), el('div', { class: 'small' }, `${cartCount()} ${t('items')}`)),
         el('button', { onclick: cartSheet }, t('view'))));

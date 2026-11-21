@@ -51,11 +51,13 @@ Admin → Settings → *Country, currency & tax*.
 | `APP_SECRET` | Recommended | Long random master secret; each restaurant gets its own derived secret. If unset, secrets are generated and stored per restaurant. Changing it invalidates printed QR codes. |
 | `PUBLIC_URL` | Recommended | e.g. `https://mehmaanos.example.af`, used in QR codes. Otherwise taken from the request. |
 | `ADMIN_PIN` / `STAFF_PIN` / `KITCHEN_PIN` | Optional | Only for an upgraded single-restaurant install. New restaurants create named accounts. |
-| `PLATFORM_PIN` | To use `/platform` | Your owner-console PIN. Console is off without it. |
+| `PLATFORM_PIN` | To use `/platform` | Your owner-console PIN, at least 10 characters. Console is off without it. |
 | `SIGNUP_CODE` | Optional | If set, signup needs this invite code (good for a controlled pilot). |
 | `SIGNUP_DISABLED` | Optional | `1` closes signup. |
 | `TRIAL_DAYS` | Optional | Free-trial length for new restaurants (default 60). |
 | `DEFAULT_SLUG` | Optional | Address of an upgraded single-restaurant install (default `main`). |
+| `TRUST_PROXY` | **Yes behind a load balancer** (Aria Run, AWS) | `1` = trust the proxy's `X-Forwarded-*` headers for client IP and HTTPS. Leave unset when the app is reached directly. |
+| `ARCHIVE_DAYS` | Optional | Finished orders older than this move to monthly archives (default 7). |
 | `PORT` | Optional | Default `3000`. |
 | `DATA_DIR` | Optional | Folder for the JSON file when no database is set. |
 
@@ -63,13 +65,15 @@ Admin → Settings → *Country, currency & tax*.
 ```
 npm install
 npm start                 # http://localhost:3000 → /signup to create a restaurant
-npm test                  # 20 tests (incl. isolation between restaurants); set TEST_DATABASE_URL to include the PostgreSQL test
+npm test                  # 24 tests (incl. isolation between restaurants, security); set TEST_DATABASE_URL to include the PostgreSQL test
 python tools/e2e_phone_outage.py   # 20 browser tests (needs: pip install playwright)
 python tools/e2e_dubai.py          # Dubai flow: UAE preset, Arabic guest, VAT
+python tools/a11y_audit.py         # accessibility audit, every screen
+node tools/loadtest.js             # load test (set DATABASE_URL to test PostgreSQL)
 ```
 Node 18+. One runtime dependency (`pg`). Health check: `GET /healthz`.
 
 ## Not included (separate decisions per the proposal)
 Online payments and automatic subscription billing (trial/paid status is tracked manually in `/platform`), split bills, POS/fiscal integration, custom domains per restaurant, email verification, loyalty/reviews, photos.
 
-See **HANDOVER.md** for deployment on Aria Run.
+See **HANDOVER.md** for deployment on Aria Run and **READINESS.md** for test evidence and the security review.

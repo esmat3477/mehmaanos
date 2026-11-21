@@ -60,7 +60,7 @@ window.MOS = (() => {
   }
   function setStatus(ok) {
     const s = document.getElementById('conn');
-    if (s) { s.textContent = ok ? '● live' : '● reconnecting…'; s.style.color = ok ? '#2FA36B' : '#E5484D'; }
+    if (s) { const dark = document.body.classList.contains('kds'); s.textContent = ok ? '● live' : '● reconnecting…'; s.style.color = ok ? (dark ? '#4ADE80' : '#1F7A4D') : (dark ? '#FCA5A5' : '#B42318'); }
   }
   async function requireRole(roles) {
     const { role } = await api('GET', '/api/me');
